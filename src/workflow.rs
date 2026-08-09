@@ -1,6 +1,6 @@
 use crate::{
-    Action, Client, Input, OpenCodeSdk, Plan, apply_plan, build_plan, detect_clients,
-    validate_base_url, validate_model_name,
+    Action, Client, Input, ModelPreset, OpenCodeSdk, Plan, apply_plan, build_plan, detect_clients,
+    popular_models, validate_base_url, validate_model_name,
 };
 use anstyle::{AnsiColor, Style};
 use anyhow::Result;
@@ -22,8 +22,9 @@ const CLIENT_PROMPT: &str = "Choose one or more clients";
 const BASE_URL_PROMPT: &str = "Compatible API base URL";
 const TOKEN_PROMPT: &str = "API token";
 const TOKEN_DISPLAY_MODE: PasswordDisplayMode = PasswordDisplayMode::Masked;
-const MODEL_PROMPT: &str = "Model ID";
-const MODEL_NAME_PROMPT: &str = "Model display name (optional; Enter uses the ID)";
+const MODEL_PROMPT: &str = "Choose a model";
+const CUSTOM_MODEL_PROMPT: &str = "Custom model ID";
+const MODEL_NAME_PROMPT: &str = "Model display name (optional; Enter keeps the suggested name)";
 const SDK_PROMPT: &str = "OpenCode AI SDK";
 const REVIEW_PROMPT: &str = "Confirm the numbered plan";
 const BLOCKED_PROMPT: &str = "Resolve blocking items before applying";
@@ -46,6 +47,34 @@ enum ModelNameChoice {
     Cancel,
     Omit,
     Value(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelChoice {
+    Preset(ModelPreset),
+    Custom,
+}
+
+impl std::fmt::Display for ModelChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Preset(preset) => {
+                write!(
+                    f,
+                    "{} [{}] ({})",
+                    preset.display_name, preset.provider, preset.id
+                )
+            }
+            Self::Custom => f.write_str(CUSTOM_MODEL_PROMPT),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedModel {
+    id: String,
+    display_name: Option<String>,
+    sdk: OpenCodeSdk,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -287,7 +316,7 @@ fn collect_input(
         .into_iter()
         .map(|option| CLIENTS[option.index])
         .collect::<Vec<_>>();
-    let model = if clients.iter().copied().any(Client::requires_model) {
+    let selected_model = if clients.iter().copied().any(Client::requires_model) {
         let Some(model) = prompt_model(render_config, palette)? else {
             return Ok(None);
         };
@@ -296,7 +325,11 @@ fn collect_input(
         None
     };
     let sdk = if clients.contains(&Client::OpenCode) {
-        let Some(sdk) = prompt_sdk(model.as_deref(), render_config)? else {
+        let Some(sdk) = prompt_sdk(
+            selected_model.as_ref().map(|model| model.sdk),
+            render_config,
+        )?
+        else {
             return Ok(None);
         };
         Some(sdk)
@@ -307,7 +340,13 @@ fn collect_input(
         .iter()
         .any(|client| matches!(client, Client::OpenCode | Client::OpenClaw))
     {
-        match prompt_model_name(render_config, palette)? {
+        match prompt_model_name(
+            selected_model
+                .as_ref()
+                .and_then(|model| model.display_name.as_deref()),
+            render_config,
+            palette,
+        )? {
             ModelNameChoice::Cancel => return Ok(None),
             ModelNameChoice::Omit => None,
             ModelNameChoice::Value(model_name) => Some(model_name),
@@ -315,6 +354,7 @@ fn collect_input(
     } else {
         None
     };
+    let model = selected_model.map(|model| model.id);
 
     Ok(Some(Input {
         base_url,
@@ -327,11 +367,11 @@ fn collect_input(
 }
 
 fn prompt_sdk(
-    model: Option<&str>,
+    suggested: Option<OpenCodeSdk>,
     render_config: &RenderConfig<'static>,
 ) -> Result<Option<OpenCodeSdk>> {
     let choices = OpenCodeSdk::choices();
-    let inferred = OpenCodeSdk::infer(model);
+    let inferred = suggested.unwrap_or_else(|| OpenCodeSdk::infer(None));
     let cursor = choices
         .iter()
         .position(|choice| *choice == inferred)
@@ -345,32 +385,70 @@ fn prompt_sdk(
     )
 }
 
-fn prompt_model(render_config: &RenderConfig<'static>, palette: Palette) -> Result<Option<String>> {
-    loop {
-        let result = Text::new(MODEL_PROMPT)
-            .with_placeholder("e.g. gpt-4.1-mini")
+fn prompt_model(
+    render_config: &RenderConfig<'static>,
+    palette: Palette,
+) -> Result<Option<SelectedModel>> {
+    let mut choices = popular_models()
+        .iter()
+        .copied()
+        .map(ModelChoice::Preset)
+        .collect::<Vec<_>>();
+    choices.push(ModelChoice::Custom);
+    let Some(choice) = optional_prompt(
+        Select::new(MODEL_PROMPT, choices)
+            .with_starting_cursor(0)
+            .with_page_size(10)
             .with_render_config(*render_config)
-            .prompt();
-        let Some(value) = optional_prompt(result)? else {
-            return Ok(None);
-        };
-        let value = value.trim().to_owned();
-        match crate::validate_model_id(&value) {
-            Ok(()) => return Ok(Some(value)),
-            Err(error) => eprintln!("{}", palette.danger(format!("Invalid model ID: {error}"))),
-        }
+            .prompt(),
+    )?
+    else {
+        return Ok(None);
+    };
+    match choice {
+        ModelChoice::Preset(preset) => Ok(Some(SelectedModel {
+            id: preset.id.to_owned(),
+            display_name: Some(preset.display_name.to_owned()),
+            sdk: preset.sdk,
+        })),
+        ModelChoice::Custom => loop {
+            let result = Text::new(CUSTOM_MODEL_PROMPT)
+                .with_placeholder("e.g. gpt-5.5")
+                .with_render_config(*render_config)
+                .prompt();
+            let Some(value) = optional_prompt(result)? else {
+                return Ok(None);
+            };
+            let value = value.trim().to_owned();
+            match crate::validate_model_id(&value) {
+                Ok(()) => {
+                    return Ok(Some(SelectedModel {
+                        sdk: OpenCodeSdk::infer(Some(&value)),
+                        id: value,
+                        display_name: None,
+                    }));
+                }
+                Err(error) => {
+                    eprintln!("{}", palette.danger(format!("Invalid model ID: {error}")));
+                }
+            }
+        },
     }
 }
 
 fn prompt_model_name(
+    default: Option<&str>,
     render_config: &RenderConfig<'static>,
     palette: Palette,
 ) -> Result<ModelNameChoice> {
     loop {
-        let result = Text::new(MODEL_NAME_PROMPT)
+        let prompt = Text::new(MODEL_NAME_PROMPT)
             .with_placeholder("e.g. GPT-5.5")
-            .with_render_config(*render_config)
-            .prompt();
+            .with_render_config(*render_config);
+        let result = match default {
+            Some(default) => prompt.with_default(default).prompt(),
+            None => prompt.prompt(),
+        };
         let Some(value) = optional_prompt(result)? else {
             return Ok(ModelNameChoice::Cancel);
         };

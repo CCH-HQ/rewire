@@ -9,7 +9,10 @@
 
 use rewire::*;
 use serde_json::Value;
-use std::{collections::HashMap, fs};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -69,6 +72,40 @@ fn model_selection_is_required_and_validated_at_the_core_boundary() {
         );
     }
     assert!(OpenCodeSdk::parse("unknown-sdk").is_err());
+}
+
+#[test]
+fn local_model_catalog_has_provider_native_ids_and_matching_sdk_families() {
+    assert!(popular_models().len() >= 70);
+    let mut ids = HashSet::new();
+    for preset in popular_models() {
+        validate_model_id(preset.id).unwrap();
+        assert!(ids.insert(preset.id), "duplicate model ID: {}", preset.id);
+        assert!(!preset.display_name.is_empty());
+        assert!(!preset.provider.is_empty());
+    }
+    assert_eq!(find_model("gpt-5.5").unwrap().sdk, OpenCodeSdk::OpenAi);
+    assert_eq!(
+        find_model("claude-sonnet-5").unwrap().sdk,
+        OpenCodeSdk::Anthropic
+    );
+    assert_eq!(
+        find_model("gemini-3.6-flash").unwrap().sdk,
+        OpenCodeSdk::Google
+    );
+    assert_eq!(
+        find_model("Qwen3-Coder-Next").unwrap().sdk,
+        OpenCodeSdk::OpenAiCompatible
+    );
+    assert_eq!(
+        find_model("kimi-k3").unwrap().sdk,
+        OpenCodeSdk::OpenAiCompatible
+    );
+    assert_eq!(
+        find_model("MiniMax-M3").unwrap().sdk,
+        OpenCodeSdk::OpenAiCompatible
+    );
+    assert!(find_model("model-not-in-catalog").is_none());
 }
 
 #[test]

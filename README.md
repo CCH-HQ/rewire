@@ -45,6 +45,13 @@ The workflow first presents a multi-select list for one or more detected clients
 
 The OpenCode workflow also asks for the SDK package and an optional catalog display name after the model ID. The SDK selector starts on the package inferred from that ID while still requiring an explicit single-choice confirmation. This keeps the provider-native model ID, the user-facing label, and the runtime SDK package as separate values.
 
+The guided workflow includes a local catalog of popular text and coding models from the reviewed
+local model snapshot, provider documentation, and a capability shortlist cross-checked against
+Artificial Analysis. It covers GPT, Claude, Gemini, DeepSeek, Qwen, GLM, Kimi, MiniMax, Grok,
+Mistral, MiMo, Nemotron, Doubao, and Cohere families. Select `Custom model ID` for a model released
+after the catalog snapshot. See [model catalog](docs/model-catalog.md) for the source version,
+refresh time, selection boundary, and current entries.
+
 ## Architecture
 
 ```text

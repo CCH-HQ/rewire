@@ -24,6 +24,7 @@ All notable changes to Rewire are documented here.
 - Post-write syntax verification before a transaction is marked committed.
 - Prepared before/after bytes, TOCTOU detection, mode preservation, journal-first writes, and failure recovery for multi-client transactions.
 - CST-based JSONC/JSON5 edits that retain comments and source formatting instead of moving comments to a synthetic header.
+- Curated local model catalog with provider-native IDs, display names, SDK families, source metadata, a capability-informed shortlist of current flagship and coding models, and a custom-model escape hatch for newly released IDs.
 - Ten sanitized, source-documented fixture variants covering minimal and production-shaped configurations for all five client adapters, including local Claude/Codex topology and official provider examples.
 - Unit and temporary-Home integration tests covering malformed input, JSON5 comments, dotenv special characters, unknown-field preservation, plaintext backup scans, private permissions, multi-file failure recovery, symlink rejection, rollback behavior, workflow review decisions, semantic output colors, and every subcommand's human/JSON contract.
 - Provider and selected-model conflict review that treats matching values as idempotent and requires guided confirmation or `--yes` before replacing an existing endpoint or current model; model removal preserves later selections that no longer point to Rewire.
