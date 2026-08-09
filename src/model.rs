@@ -52,6 +52,196 @@ impl Client {
             Self::OpenClaw => "openclaw",
         }
     }
+
+    /// Whether this client needs a selected model in addition to a configured provider.
+    #[must_use]
+    pub const fn requires_model(self) -> bool {
+        matches!(self, Self::OpenCode | Self::Hermes | Self::OpenClaw)
+    }
+
+    /// Check the shared raw model-ID contract before an adapter formats it for its client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a selected client requires a model or when the supplied ID would
+    /// produce an ambiguous Rewire provider reference.
+    pub fn validate_model_selection(clients: &[Self], model: Option<&str>) -> Result<()> {
+        Self::validate_model_configuration(
+            clients,
+            model,
+            None,
+            clients
+                .contains(&Self::OpenCode)
+                .then_some(OpenCodeSdk::OpenAiCompatible),
+        )
+    }
+
+    /// Validate the complete model contract shared by CLI, workflow, and adapters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required model is missing, an ID/display name is malformed, or
+    /// OpenCode-only options are supplied to another client.
+    pub fn validate_model_configuration(
+        clients: &[Self],
+        model: Option<&str>,
+        model_name: Option<&str>,
+        sdk: Option<OpenCodeSdk>,
+    ) -> Result<()> {
+        let required_by = clients
+            .iter()
+            .copied()
+            .filter(|client| client.requires_model())
+            .map(Self::name)
+            .collect::<Vec<_>>();
+        if !required_by.is_empty() && model.is_none() {
+            return Err(anyhow!(
+                "--model is required when configuring {}",
+                required_by.join(", ")
+            ));
+        }
+        if let Some(model) = model {
+            validate_model_id(model)?;
+        }
+        if model_name.is_some()
+            && !clients
+                .iter()
+                .any(|client| matches!(client, Self::OpenCode | Self::OpenClaw))
+        {
+            return Err(anyhow!(
+                "--model-name is only valid when configuring opencode or openclaw"
+            ));
+        }
+        if let Some(model_name) = model_name {
+            validate_model_name(model_name)?;
+        }
+        if sdk.is_some() && !clients.contains(&Self::OpenCode) {
+            return Err(anyhow!("--sdk is only valid when configuring opencode"));
+        }
+        Ok(())
+    }
+}
+
+/// AI SDK implementation used by an `OpenCode` provider entry.
+///
+/// `OpenCode` loads the package named by `provider.<id>.npm`; the package must
+/// match the wire protocol exposed by the selected gateway/model family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpenCodeSdk {
+    OpenAi,
+    Anthropic,
+    Google,
+    OpenAiCompatible,
+}
+
+impl OpenCodeSdk {
+    /// Parse friendly names and the package names accepted by the CLI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is not one of the supported SDK aliases.
+    pub fn parse(value: &str) -> Result<Self> {
+        let value = value.trim();
+        match value.to_ascii_lowercase().as_str() {
+            "openai" | "@ai-sdk/openai" => Ok(Self::OpenAi),
+            "anthropic" | "@ai-sdk/anthropic" => Ok(Self::Anthropic),
+            "google" | "gemini" | "@ai-sdk/google" => Ok(Self::Google),
+            "openai-compatible"
+            | "openai_compatible"
+            | "compatible"
+            | "@ai-sdk/openai-compatible" => Ok(Self::OpenAiCompatible),
+            _ => Err(anyhow!(
+                "unknown OpenCode SDK `{value}`; choose openai, anthropic, google, or openai-compatible"
+            )),
+        }
+    }
+
+    #[must_use]
+    pub const fn npm(self) -> &'static str {
+        match self {
+            Self::OpenAi => "@ai-sdk/openai",
+            Self::Anthropic => "@ai-sdk/anthropic",
+            Self::Google => "@ai-sdk/google",
+            Self::OpenAiCompatible => "@ai-sdk/openai-compatible",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai (@ai-sdk/openai)",
+            Self::Anthropic => "anthropic (@ai-sdk/anthropic)",
+            Self::Google => "google (@ai-sdk/google)",
+            Self::OpenAiCompatible => "openai-compatible (@ai-sdk/openai-compatible)",
+        }
+    }
+
+    #[must_use]
+    pub const fn choices() -> [Self; 4] {
+        [
+            Self::OpenAi,
+            Self::Anthropic,
+            Self::Google,
+            Self::OpenAiCompatible,
+        ]
+    }
+
+    /// Infer a sensible package for common model families while keeping an explicit
+    /// SDK override available for gateways that expose a nonstandard model ID.
+    #[must_use]
+    pub fn infer(model: Option<&str>) -> Self {
+        let model = model.unwrap_or_default().to_ascii_lowercase();
+        if model.contains("claude") {
+            Self::Anthropic
+        } else if model.contains("gemini") {
+            Self::Google
+        } else if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
+            Self::OpenAi
+        } else {
+            Self::OpenAiCompatible
+        }
+    }
+}
+
+impl std::fmt::Display for OpenCodeSdk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Validate a human-facing catalog name without conflating it with the API ID.
+///
+/// # Errors
+///
+/// Returns an error when the display name is empty, padded, or contains control characters.
+pub fn validate_model_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.trim() != name || name.chars().any(char::is_control) {
+        return Err(anyhow!(
+            "--model-name must be non-empty and must not contain whitespace padding or control characters"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the provider-native model ID accepted by the single CLI input.
+///
+/// Adapters add their own `rewire/` reference syntax where their client requires it. Keeping the
+/// raw ID unprefixed prevents accidental values such as `rewire/rewire/gpt-4.1-mini`.
+///
+/// # Errors
+///
+/// Returns an error for empty, whitespace-padded, control-character, or Rewire-prefixed IDs.
+pub fn validate_model_id(model: &str) -> Result<()> {
+    if model.is_empty()
+        || model.trim() != model
+        || model.chars().any(char::is_control)
+        || model.starts_with("rewire/")
+    {
+        return Err(anyhow!(
+            "--model must be a non-empty provider-native ID without whitespace padding or a rewire/ prefix"
+        ));
+    }
+    Ok(())
 }
 impl std::fmt::Display for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -79,6 +269,10 @@ pub struct Recipe {
     pub sensitive: bool,
     /// JSON pointer for the adapter-owned provider endpoint, when this recipe defines one.
     pub(crate) provider_endpoint: Option<&'static str>,
+    /// JSON pointer for the client-native selected model written by this recipe.
+    pub(crate) selected_model: Option<&'static str>,
+    /// Selection fields removed only while they still refer to the Rewire provider.
+    pub(crate) conditional_removals: Vec<ConditionalRemoval>,
     /// Removal recipes delete the named owned fields instead of merging values.
     pub(crate) removal: bool,
 }
@@ -92,9 +286,19 @@ impl std::fmt::Debug for Recipe {
             .field("values", &"[REDACTED]")
             .field("sensitive", &self.sensitive)
             .field("provider_endpoint", &self.provider_endpoint)
+            .field("selected_model", &self.selected_model)
+            .field("conditional_removals", &self.conditional_removals)
             .field("removal", &self.removal)
             .finish()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ConditionalRemoval {
+    pub(crate) removal_pointer: &'static str,
+    pub(crate) condition_pointer: &'static str,
+    pub(crate) expected: &'static str,
+    pub(crate) prefix: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +307,10 @@ pub struct Plan {
     pub base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdk: Option<String>,
     pub clients: Vec<Client>,
     pub changes: Vec<PlannedChange>,
     pub conflicts: Vec<Conflict>,
@@ -220,6 +428,8 @@ pub struct Input {
     pub token: Secret,
     pub clients: Vec<Client>,
     pub model: Option<String>,
+    pub model_name: Option<String>,
+    pub sdk: Option<OpenCodeSdk>,
 }
 #[derive(Clone)]
 pub struct Secret(String);

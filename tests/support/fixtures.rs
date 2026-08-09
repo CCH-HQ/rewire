@@ -54,17 +54,22 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         fixture: "tests/fixtures/opencode/opencode.jsonc",
         target: ".config/opencode/opencode.jsonc",
         preserved: &["Operator-owned comment", "theme", "existing"],
-        adapter: &["@ai-sdk/openai-compatible", "{file:"],
+        adapter: &[
+            "@ai-sdk/openai-compatible",
+            "{file:",
+            "rewire/fixture-model",
+        ],
     },
     FixtureCase {
         name: "opencode-official-shaped",
         client: "opencode",
         fixture: "tests/fixtures/opencode/opencode-official-shaped.jsonc",
         target: ".config/opencode/opencode.jsonc",
-        preserved: &["$schema", "coder-model", "instructions"],
+        preserved: &["$schema", "gpt-5.5", "GPT-5.5", "instructions"],
         adapter: &[
             "@ai-sdk/openai-compatible",
             "https://fixture-gateway.example",
+            "rewire/fixture-model",
         ],
     },
     FixtureCase {
@@ -73,7 +78,12 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         fixture: "tests/fixtures/hermes/config.yaml",
         target: ".hermes/config.yaml",
         preserved: &["features:", "existing:"],
-        adapter: &["key_env: REWIRE_TOKEN", "transport: chat_completions"],
+        adapter: &[
+            "key_env: REWIRE_TOKEN",
+            "transport: chat_completions",
+            "provider: rewire",
+            "name: fixture-model",
+        ],
     },
     FixtureCase {
         name: "hermes-official-shaped",
@@ -84,6 +94,8 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         adapter: &[
             "api: https://fixture-gateway.example",
             "key_env: REWIRE_TOKEN",
+            "provider: rewire",
+            "name: fixture-model",
         ],
     },
     FixtureCase {
@@ -92,7 +104,12 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         fixture: "tests/fixtures/openclaw/openclaw.json",
         target: ".openclaw/openclaw.json",
         preserved: &["gateway", "existing"],
-        adapter: &["models", "singleValue", "openai-completions"],
+        adapter: &[
+            "models",
+            "singleValue",
+            "openai-completions",
+            "rewire/fixture-model",
+        ],
     },
     FixtureCase {
         name: "openclaw-official-shaped",
@@ -100,6 +117,11 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         fixture: "tests/fixtures/openclaw/openclaw-official-shaped.json",
         target: ".openclaw/openclaw.json",
         preserved: &["existing-proxy", "~/workspace", "coder-model"],
-        adapter: &["rewire", "singleValue", "https://fixture-gateway.example"],
+        adapter: &[
+            "rewire",
+            "singleValue",
+            "https://fixture-gateway.example",
+            "rewire/fixture-model",
+        ],
     },
 ];

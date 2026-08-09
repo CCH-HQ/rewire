@@ -1,4 +1,6 @@
-use crate::model::{Client, Format, Recipe};
+mod opencode;
+
+use crate::model::{Client, ConditionalRemoval, Format, OpenCodeSdk, Recipe};
 use serde_json::{Map, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -21,12 +23,33 @@ impl Client {
         token: &str,
         model: Option<&str>,
     ) -> Vec<Recipe> {
+        self.recipes_with_options(home, base_url, token, model, None, None)
+    }
+
+    /// Build recipes with the complete model catalog metadata selected by the operator.
+    #[must_use]
+    pub fn recipes_with_options(
+        self,
+        home: &Path,
+        base_url: &str,
+        token: &str,
+        model: Option<&str>,
+        model_name: Option<&str>,
+        sdk: Option<OpenCodeSdk>,
+    ) -> Vec<Recipe> {
         match self {
             Self::Claude => claude_recipes(home, base_url, token),
-            Self::Codex => codex_recipes(home, base_url, token, model),
-            Self::OpenCode => opencode_recipes(home, base_url, token, model),
+            Self::Codex => codex_recipes(home, base_url, token),
+            Self::OpenCode => opencode::recipes(
+                home,
+                base_url,
+                token,
+                model,
+                model_name,
+                sdk.unwrap_or_else(|| OpenCodeSdk::infer(model)),
+            ),
             Self::Hermes => hermes_recipes(home, base_url, token, model),
-            Self::OpenClaw => openclaw_recipes(home, base_url, token, model),
+            Self::OpenClaw => openclaw_recipes(home, base_url, token, model, model_name),
         }
     }
 
@@ -61,96 +84,116 @@ impl Client {
     #[must_use]
     pub fn removal_recipes(self, home: &Path) -> Vec<Recipe> {
         match self {
-            Self::Claude => vec![removal_recipe(
-                self,
-                client_directory(home, "CLAUDE_CONFIG_DIR", ".claude").join("settings.json"),
-                Format::Json,
-                object([(
-                    "env",
-                    object([
-                        ("ANTHROPIC_BASE_URL", Value::Null),
-                        ("ANTHROPIC_AUTH_TOKEN", Value::Null),
-                    ]),
-                )]),
-                false,
-            )],
-            Self::Codex => vec![removal_recipe(
-                self,
-                client_directory(home, "CODEX_HOME", ".codex").join("config.toml"),
-                Format::Toml,
-                object([
-                    ("model_providers", object([("rewire", Value::Null)])),
-                    ("profiles", object([("rewire", Value::Null)])),
-                ]),
-                false,
-            )],
-            Self::OpenCode => vec![
-                removal_recipe(
-                    self,
-                    opencode_config_path(home),
-                    Format::Json,
-                    object([("provider", object([("rewire", Value::Null)]))]),
-                    false,
-                ),
-                removal_recipe(
-                    self,
-                    home.join(".config/rewire/secrets/opencode-token"),
-                    Format::Plain,
-                    Value::Null,
-                    true,
-                ),
-            ],
-            Self::Hermes => {
-                let directory = client_directory(home, "HERMES_HOME", ".hermes");
-                vec![
-                    removal_recipe(
-                        self,
-                        directory.join("config.yaml"),
-                        Format::Yaml,
-                        object([("providers", object([("rewire", Value::Null)]))]),
-                        false,
-                    ),
-                    removal_recipe(
-                        self,
-                        directory.join(".env"),
-                        Format::Dotenv,
-                        object([("REWIRE_TOKEN", Value::Null)]),
-                        true,
-                    ),
-                ]
-            }
-            Self::OpenClaw => {
-                let directory = client_directory(home, "OPENCLAW_STATE_DIR", ".openclaw");
-                let config = client_file_from_env(home, "OPENCLAW_CONFIG_PATH")
-                    .unwrap_or_else(|| directory.join("openclaw.json"));
-                vec![
-                    removal_recipe(
-                        self,
-                        config,
-                        Format::Json,
-                        object([
-                            (
-                                "secrets",
-                                object([("providers", object([("rewire", Value::Null)]))]),
-                            ),
-                            (
-                                "models",
-                                object([("providers", object([("rewire", Value::Null)]))]),
-                            ),
-                        ]),
-                        false,
-                    ),
-                    removal_recipe(
-                        self,
-                        directory.join("secrets/rewire-token"),
-                        Format::Plain,
-                        Value::Null,
-                        true,
-                    ),
-                ]
-            }
+            Self::Claude => claude_removal_recipes(home),
+            Self::Codex => codex_removal_recipes(home),
+            Self::OpenCode => opencode::removal_recipes(home),
+            Self::Hermes => hermes_removal_recipes(home),
+            Self::OpenClaw => openclaw_removal_recipes(home),
         }
     }
+}
+
+fn claude_removal_recipes(home: &Path) -> Vec<Recipe> {
+    vec![removal_recipe(
+        Client::Claude,
+        client_directory(home, "CLAUDE_CONFIG_DIR", ".claude").join("settings.json"),
+        Format::Json,
+        object([(
+            "env",
+            object([
+                ("ANTHROPIC_BASE_URL", Value::Null),
+                ("ANTHROPIC_AUTH_TOKEN", Value::Null),
+            ]),
+        )]),
+        false,
+    )]
+}
+
+fn codex_removal_recipes(home: &Path) -> Vec<Recipe> {
+    vec![removal_recipe(
+        Client::Codex,
+        client_directory(home, "CODEX_HOME", ".codex").join("config.toml"),
+        Format::Toml,
+        object([
+            ("model_providers", object([("rewire", Value::Null)])),
+            ("profiles", object([("rewire", Value::Null)])),
+        ]),
+        false,
+    )]
+}
+
+fn hermes_removal_recipes(home: &Path) -> Vec<Recipe> {
+    let directory = client_directory(home, "HERMES_HOME", ".hermes");
+    let mut config = removal_recipe(
+        Client::Hermes,
+        directory.join("config.yaml"),
+        Format::Yaml,
+        object([
+            ("model", Value::Null),
+            ("providers", object([("rewire", Value::Null)])),
+        ]),
+        false,
+    );
+    config.conditional_removals.push(ConditionalRemoval {
+        removal_pointer: "/model",
+        condition_pointer: "/model/provider",
+        expected: "rewire",
+        prefix: false,
+    });
+    vec![
+        config,
+        removal_recipe(
+            Client::Hermes,
+            directory.join(".env"),
+            Format::Dotenv,
+            object([("REWIRE_TOKEN", Value::Null)]),
+            true,
+        ),
+    ]
+}
+
+fn openclaw_removal_recipes(home: &Path) -> Vec<Recipe> {
+    let directory = client_directory(home, "OPENCLAW_STATE_DIR", ".openclaw");
+    let config_path = client_file_from_env(home, "OPENCLAW_CONFIG_PATH")
+        .unwrap_or_else(|| directory.join("openclaw.json"));
+    let mut config = removal_recipe(
+        Client::OpenClaw,
+        config_path,
+        Format::Json,
+        object([
+            (
+                "agents",
+                object([(
+                    "defaults",
+                    object([("model", object([("primary", Value::Null)]))]),
+                )]),
+            ),
+            (
+                "secrets",
+                object([("providers", object([("rewire", Value::Null)]))]),
+            ),
+            (
+                "models",
+                object([("providers", object([("rewire", Value::Null)]))]),
+            ),
+        ]),
+        false,
+    );
+    config
+        .conditional_removals
+        .push(rewire_model_reference_removal(
+            "/agents/defaults/model/primary",
+        ));
+    vec![
+        config,
+        removal_recipe(
+            Client::OpenClaw,
+            directory.join("secrets/rewire-token"),
+            Format::Plain,
+            Value::Null,
+            true,
+        ),
+    ]
 }
 
 fn env_value_differs(name: &str, planned: &str, normalize_url: bool) -> bool {
@@ -183,11 +226,7 @@ fn claude_recipes(home: &Path, base_url: &str, token: &str) -> Vec<Recipe> {
     )]
 }
 
-fn codex_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>) -> Vec<Recipe> {
-    let mut profile = Map::from_iter([("model_provider".into(), string("rewire"))]);
-    if let Some(model) = model {
-        profile.insert("model".into(), string(model));
-    }
+fn codex_recipes(home: &Path, base_url: &str, token: &str) -> Vec<Recipe> {
     vec![provider_recipe(
         Client::Codex,
         client_directory(home, "CODEX_HOME", ".codex").join("config.toml"),
@@ -206,41 +245,15 @@ fn codex_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>) 
                     ]),
                 )]),
             ),
-            ("profiles", object([("rewire", Value::Object(profile))])),
+            (
+                "profiles",
+                object([("rewire", object([("model_provider", string("rewire"))]))]),
+            ),
         ]),
         true,
         "/model_providers/rewire/base_url",
+        None,
     )]
-}
-
-fn opencode_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>) -> Vec<Recipe> {
-    let secret_path = home.join(".config/rewire/secrets/opencode-token");
-    let reference = format!("{{file:{}}}", secret_path.to_string_lossy());
-    vec![
-        provider_recipe(
-            Client::OpenCode,
-            opencode_config_path(home),
-            Format::Json,
-            object([(
-                "provider",
-                object([(
-                    "rewire",
-                    object([
-                        ("name", string("Rewire")),
-                        ("npm", string("@ai-sdk/openai-compatible")),
-                        (
-                            "options",
-                            object([("baseURL", string(base_url)), ("apiKey", string(reference))]),
-                        ),
-                        ("models", opencode_models(model)),
-                    ]),
-                )]),
-            )]),
-            false,
-            "/provider/rewire/options/baseURL",
-        ),
-        plain_recipe(Client::OpenCode, secret_path, token),
-    ]
 }
 
 fn hermes_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>) -> Vec<Recipe> {
@@ -250,24 +263,25 @@ fn hermes_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>)
             Client::Hermes,
             directory.join("config.yaml"),
             Format::Yaml,
-            object([(
-                "providers",
-                object([(
-                    "rewire",
-                    object_with_optional_model(
-                        [
+            object([
+                ("model", hermes_model_selection(model)),
+                (
+                    "providers",
+                    object([(
+                        "rewire",
+                        object([
                             ("name", string("Rewire")),
                             ("api", string(base_url)),
                             ("key_env", string("REWIRE_TOKEN")),
                             ("transport", string("chat_completions")),
-                        ],
-                        "default_model",
-                        model,
-                    ),
-                )]),
-            )]),
+                            ("default_model", string(model.unwrap_or_default())),
+                        ]),
+                    )]),
+                ),
+            ]),
             false,
             "/providers/rewire/api",
+            Some("/model"),
         ),
         structured_recipe(
             Client::Hermes,
@@ -279,7 +293,13 @@ fn hermes_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>)
     ]
 }
 
-fn openclaw_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>) -> Vec<Recipe> {
+fn openclaw_recipes(
+    home: &Path,
+    base_url: &str,
+    token: &str,
+    model: Option<&str>,
+    model_name: Option<&str>,
+) -> Vec<Recipe> {
     let directory = client_directory(home, "OPENCLAW_STATE_DIR", ".openclaw");
     let config = client_file_from_env(home, "OPENCLAW_CONFIG_PATH")
         .unwrap_or_else(|| directory.join("openclaw.json"));
@@ -321,15 +341,26 @@ fn openclaw_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str
                                     ("baseUrl", string(base_url)),
                                     ("apiKey", secret_ref),
                                     ("api", string("openai-completions")),
-                                    ("models", openclaw_models(model)),
+                                    ("models", openclaw_models(model, model_name)),
                                 ]),
                             )]),
                         ),
                     ]),
                 ),
+                (
+                    "agents",
+                    object([(
+                        "defaults",
+                        object([(
+                            "model",
+                            object([("primary", string(provider_model_reference(model)))]),
+                        )]),
+                    )]),
+                ),
             ]),
             false,
             "/models/providers/rewire/baseUrl",
+            Some("/agents/defaults/model/primary"),
         ),
         plain_recipe(Client::OpenClaw, secret_path, token),
     ]
@@ -349,6 +380,8 @@ fn structured_recipe(
         values,
         sensitive,
         provider_endpoint: None,
+        selected_model: None,
+        conditional_removals: Vec::new(),
         removal: false,
     }
 }
@@ -372,9 +405,11 @@ fn provider_recipe(
     values: Value,
     sensitive: bool,
     provider_endpoint: &'static str,
+    selected_model: Option<&'static str>,
 ) -> Recipe {
     let mut recipe = structured_recipe(client, path, format, values, sensitive);
     recipe.provider_endpoint = Some(provider_endpoint);
+    recipe.selected_model = selected_model;
     recipe
 }
 
@@ -382,58 +417,38 @@ fn plain_recipe(client: Client, path: PathBuf, token: &str) -> Recipe {
     structured_recipe(client, path, Format::Plain, string(token), true)
 }
 
-fn object_with_optional_model(
-    entries: impl IntoIterator<Item = (&'static str, Value)>,
-    key: &'static str,
-    model: Option<&str>,
-) -> Value {
-    let mut value = object(entries);
-    if let (Some(model), Some(map)) = (model, value.as_object_mut()) {
-        map.insert(key.into(), string(model));
+fn rewire_model_reference_removal(pointer: &'static str) -> ConditionalRemoval {
+    ConditionalRemoval {
+        removal_pointer: pointer,
+        condition_pointer: pointer,
+        expected: "rewire/",
+        prefix: true,
     }
-    value
 }
 
-fn opencode_models(model: Option<&str>) -> Value {
-    let mut models = Map::new();
-    if let Some(model) = model {
-        models.insert(model.into(), object([("name", string(model))]));
-    }
-    Value::Object(models)
+fn provider_model_reference(model: Option<&str>) -> String {
+    format!("rewire/{}", model.unwrap_or_default())
 }
 
-fn openclaw_models(model: Option<&str>) -> Value {
+fn hermes_model_selection(model: Option<&str>) -> Value {
+    object([
+        ("provider", string("rewire")),
+        ("name", string(model.unwrap_or_default())),
+    ])
+}
+
+fn openclaw_models(model: Option<&str>, model_name: Option<&str>) -> Value {
     Value::Array(
         model
-            .map(|model| object([("id", string(model)), ("name", string(model))]))
+            .map(|model| {
+                object([
+                    ("id", string(model)),
+                    ("name", string(model_name.unwrap_or(model))),
+                ])
+            })
             .into_iter()
             .collect(),
     )
-}
-
-fn opencode_config_path(home: &Path) -> PathBuf {
-    if let Some(path) = client_file_from_env(home, "OPENCODE_CONFIG") {
-        return path;
-    }
-    let directory = if honor_client_environment(home) {
-        env::var_os("OPENCODE_CONFIG_DIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                env::var_os("XDG_CONFIG_HOME")
-                    .filter(|value| !value.is_empty())
-                    .map(|value| PathBuf::from(value).join("opencode"))
-            })
-            .unwrap_or_else(|| home.join(".config/opencode"))
-    } else {
-        home.join(".config/opencode")
-    };
-    // Match OpenCode's own globalConfigFile() order and default to its preferred JSONC target.
-    ["opencode.jsonc", "opencode.json", "config.json"]
-        .into_iter()
-        .map(|name| directory.join(name))
-        .find(|path| path.exists())
-        .unwrap_or_else(|| directory.join("opencode.jsonc"))
 }
 
 fn client_directory(home: &Path, variable: &str, fallback: &str) -> PathBuf {

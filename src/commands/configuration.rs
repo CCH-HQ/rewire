@@ -1,6 +1,6 @@
 use crate::cli::Cli;
 use anyhow::{Result, anyhow};
-use rewire::{Client, Input, detect_clients, read_token};
+use rewire::{Client, Input, OpenCodeSdk, detect_clients, read_token, validate_model_name};
 use std::path::Path;
 
 /// Consume configuration credentials and selectors exactly once for plan/apply commands.
@@ -19,10 +19,31 @@ pub(super) fn input(cli: &mut Cli, home: &Path) -> Result<Input> {
         }
         detected
     };
+    let model = cli
+        .model
+        .take()
+        .map(|model| model.trim().to_owned())
+        .filter(|model| !model.is_empty());
+    let model_name = cli
+        .model_name
+        .take()
+        .map(|model| model.trim().to_owned())
+        .filter(|model| !model.is_empty());
+    if let Some(model_name) = model_name.as_deref() {
+        validate_model_name(model_name)?;
+    }
+    let sdk = cli
+        .sdk
+        .take()
+        .map(|sdk| OpenCodeSdk::parse(&sdk))
+        .transpose()?;
+    Client::validate_model_configuration(&clients, model.as_deref(), model_name.as_deref(), sdk)?;
     Ok(Input {
         base_url,
         token,
         clients,
-        model: cli.model.take().filter(|model| !model.trim().is_empty()),
+        model,
+        model_name,
+        sdk,
     })
 }

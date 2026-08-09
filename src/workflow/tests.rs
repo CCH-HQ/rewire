@@ -18,6 +18,8 @@ fn final_review_numbers_only_modifications_and_conflicts() {
         token: crate::Secret::new("number-secret").unwrap(),
         clients: vec![Client::Claude, Client::Codex],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(home.path(), &input).unwrap();
     let items = numbered_plan_items(&plan);
@@ -75,6 +77,8 @@ fn malformed_target_gets_a_number_and_reason() {
             token: crate::Secret::new("secret").unwrap(),
             clients: vec![Client::Claude],
             model: None,
+            model_name: None,
+            sdk: None,
         },
     )
     .unwrap();
@@ -99,6 +103,8 @@ fn workflow_control_text_remains_ascii_for_legacy_windows_code_pages() {
         BASE_URL_PROMPT,
         TOKEN_PROMPT,
         MODEL_PROMPT,
+        MODEL_NAME_PROMPT,
+        SDK_PROMPT,
         REVIEW_PROMPT,
         BLOCKED_PROMPT,
     ];
@@ -107,6 +113,25 @@ fn workflow_control_text_remains_ascii_for_legacy_windows_code_pages() {
     assert!(actions.iter().all(|(_, label)| label.is_ascii()));
     assert_eq!(TOKEN_DISPLAY_MODE, PasswordDisplayMode::Masked);
     assert!(render_config(true).password_mask.is_ascii());
+}
+
+#[test]
+fn opencode_sdk_choices_are_typed_and_model_aware() {
+    let choices = OpenCodeSdk::choices();
+    assert!(choices.iter().all(|choice| choice.to_string().is_ascii()));
+    for (model, expected, cursor) in [
+        ("gpt-5.5", OpenCodeSdk::OpenAi, 0),
+        ("claude-sonnet-4-5", OpenCodeSdk::Anthropic, 1),
+        ("gemini-3-pro", OpenCodeSdk::Google, 2),
+        ("custom-model", OpenCodeSdk::OpenAiCompatible, 3),
+    ] {
+        let inferred = OpenCodeSdk::infer(Some(model));
+        assert_eq!(inferred, expected);
+        assert_eq!(
+            choices.iter().position(|choice| *choice == inferred),
+            Some(cursor)
+        );
+    }
 }
 
 #[test]

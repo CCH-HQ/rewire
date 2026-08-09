@@ -44,25 +44,20 @@ pub fn merge_recipe(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<u8>>
 
 fn remove_recipe(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<u8>> {
     let existing = existing.unwrap_or_default();
+    let patch = removal_patch(recipe, existing)?;
     match recipe.format {
         Format::Json => {
             let source = std::str::from_utf8(if existing.is_empty() { b"{}" } else { existing })?;
             let root = CstRootNode::parse(source, &ParseOptions::default())
                 .context("parse JSON/JSONC/JSON5 configuration")?;
-            remove_cst_fields(
-                &root.object_value_or_set(),
-                recipe.values.as_object().expect("removal recipe object"),
-            )?;
+            remove_cst_fields(&root.object_value_or_set(), &patch)?;
             Ok(root.to_string().into_bytes())
         }
         Format::Toml => {
             let mut document = std::str::from_utf8(existing)?
                 .parse::<toml_edit::DocumentMut>()
                 .context("parse TOML configuration")?;
-            remove_toml_fields(
-                document.as_table_mut(),
-                recipe.values.as_object().expect("removal recipe object"),
-            )?;
+            remove_toml_fields(document.as_table_mut(), &patch)?;
             Ok(document.to_string().into_bytes())
         }
         Format::Yaml => {
@@ -74,13 +69,61 @@ fn remove_recipe(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<u8>> {
             remove_value_fields(
                 root.as_object_mut()
                     .ok_or_else(|| anyhow!("YAML configuration root is not an object"))?,
-                recipe.values.as_object().expect("removal recipe object"),
+                &patch,
             )?;
             Ok(serde_yaml::to_string(&root)?.into_bytes())
         }
         Format::Dotenv => remove_dotenv_keys(recipe, existing),
         Format::Plain => Ok(Vec::new()),
     }
+}
+
+fn removal_patch(recipe: &Recipe, existing: &[u8]) -> Result<Map<String, Value>> {
+    let mut patch = recipe.values.as_object().cloned().unwrap_or_default();
+    if recipe.conditional_removals.is_empty() {
+        return Ok(patch);
+    }
+    let root =
+        parse_structured(recipe.format, existing)?.unwrap_or_else(|| Value::Object(Map::new()));
+    for conditional in &recipe.conditional_removals {
+        let matches = root
+            .pointer(conditional.condition_pointer)
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                if conditional.prefix {
+                    value.starts_with(conditional.expected)
+                } else {
+                    value == conditional.expected
+                }
+            });
+        if !matches {
+            remove_patch_pointer(&mut patch, conditional.removal_pointer);
+        }
+    }
+    Ok(patch)
+}
+
+fn remove_patch_pointer(removals: &mut Map<String, Value>, pointer: &str) {
+    let segments = pointer
+        .strip_prefix('/')
+        .expect("conditional removal pointers are absolute")
+        .split('/')
+        .collect::<Vec<_>>();
+    remove_patch_path(removals, &segments);
+}
+
+fn remove_patch_path(removals: &mut Map<String, Value>, segments: &[&str]) -> bool {
+    let Some((key, remaining)) = segments.split_first() else {
+        return removals.is_empty();
+    };
+    if remaining.is_empty() {
+        removals.remove(*key);
+    } else if let Some(child) = removals.get_mut(*key).and_then(Value::as_object_mut)
+        && remove_patch_path(child, remaining)
+    {
+        removals.remove(*key);
+    }
+    removals.is_empty()
 }
 
 fn remove_cst_fields(target: &CstObject, patch: &Map<String, Value>) -> Result<()> {

@@ -1,7 +1,8 @@
 use crate::clients::CLIENTS;
 use crate::format::{merge_recipe, parse_structured};
 use crate::model::{
-    Action, Client, Conflict, FileSnapshot, Input, Plan, PlannedChange, PreparedChange, Recipe,
+    Action, Client, Conflict, FileSnapshot, Input, OpenCodeSdk, Plan, PlannedChange,
+    PreparedChange, Recipe,
 };
 use crate::security::{ensure_safe_path, hash_bytes, redact, validate_base_url};
 use anyhow::{Context, Result};
@@ -39,17 +40,39 @@ pub fn detect_clients(home: &Path) -> Vec<Client> {
 /// retained as blocking conflicts so the caller can present the entire review in one pass.
 pub fn build_plan(home: &Path, input: &Input) -> Result<Plan> {
     let base_url = validate_base_url(&input.base_url)?;
+    Client::validate_model_configuration(
+        &input.clients,
+        input.model.as_deref(),
+        input.model_name.as_deref(),
+        input.sdk,
+    )?;
+    let model = input
+        .clients
+        .iter()
+        .copied()
+        .any(Client::requires_model)
+        .then_some(input.model.as_deref())
+        .flatten();
+    let sdk = input.clients.contains(&Client::OpenCode).then(|| {
+        input
+            .sdk
+            .unwrap_or_else(|| OpenCodeSdk::infer(model))
+            .npm()
+            .to_owned()
+    });
     let mut changes = Vec::new();
     let mut conflicts = Vec::new();
     let mut warnings = Vec::new();
     let mut prepared = Vec::new();
     for &client in &input.clients {
         // Plan every candidate before writing anything, preventing partial application on parse errors.
-        for recipe in client.recipes(
+        for recipe in client.recipes_with_options(
             home,
             &base_url,
             input.token.expose(),
-            input.model.as_deref(),
+            model,
+            input.model_name.as_deref(),
+            input.sdk,
         ) {
             match plan_recipe(home, recipe, input.token.expose()) {
                 Ok(client_plan) => {
@@ -60,16 +83,13 @@ pub fn build_plan(home: &Path, input: &Input) -> Result<Plan> {
                 Err(conflict) => conflicts.push(conflict),
             }
         }
-        warnings.extend(client_warnings(
-            client,
-            input.model.as_deref(),
-            &base_url,
-            input.token.expose(),
-        ));
+        warnings.extend(client_warnings(client, &base_url, input.token.expose()));
     }
     Ok(Plan {
         base_url,
-        model: input.model.clone(),
+        model: model.map(ToOwned::to_owned),
+        model_name: input.model_name.clone(),
+        sdk,
         clients: input.clients.clone(),
         changes,
         conflicts,
@@ -102,6 +122,8 @@ pub fn build_remove_plan(home: &Path, clients: &[Client]) -> Result<Plan> {
     Ok(Plan {
         base_url: String::new(),
         model: None,
+        model_name: None,
+        sdk: None,
         clients: clients.to_vec(),
         changes,
         conflicts,
@@ -133,7 +155,7 @@ fn plan_recipe(
         bytes: existing.clone(),
         mode: file_mode(metadata.as_ref()),
     };
-    let conflicts = provider_endpoint_conflicts(&recipe, exists.then_some(existing.as_slice()))
+    let conflicts = recipe_conflicts(&recipe, exists.then_some(existing.as_slice()))
         .map_err(|error| blocking_conflict(client, &recipe.path, error.to_string(), token))?;
     let merged = merge_recipe(&recipe, exists.then_some(existing.as_slice()))
         .map_err(|error| blocking_conflict(client, &recipe.path, error.to_string(), token))?;
@@ -167,54 +189,61 @@ fn plan_recipe(
     })
 }
 
-fn provider_endpoint_conflicts(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<Conflict>> {
-    let (Some(pointer), Some(existing)) = (recipe.provider_endpoint, existing) else {
+fn recipe_conflicts(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<Conflict>> {
+    let Some(existing) = existing else {
         return Ok(Vec::new());
     };
     let Some(root) = parse_structured(recipe.format, existing)? else {
         return Ok(Vec::new());
     };
-    let Some(current) = root.pointer(pointer) else {
-        return Ok(Vec::new());
-    };
-    let requested = recipe
-        .values
-        .pointer(pointer)
-        .and_then(Value::as_str)
-        .expect("provider endpoint recipes contain a string URL");
-    let same_endpoint = current
-        .as_str()
-        .and_then(|value| validate_base_url(value).ok())
-        .is_some_and(|value| value == requested);
-    if same_endpoint {
-        return Ok(Vec::new());
+    let mut conflicts = Vec::new();
+    if let Some(pointer) = recipe.provider_endpoint
+        && let Some(current) = root.pointer(pointer)
+    {
+        let requested = recipe
+            .values
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .expect("provider endpoint recipes contain a string URL");
+        let same_endpoint = current
+            .as_str()
+            .and_then(|value| validate_base_url(value).ok())
+            .is_some_and(|value| value == requested);
+        if !same_endpoint {
+            conflicts.push(review_conflict(
+                recipe,
+                "provider `rewire` already uses a different base URL; applying will replace it",
+            ));
+        }
     }
-    Ok(vec![Conflict {
-        client: recipe.client,
-        path: recipe.path.clone(),
-        reason: "provider `rewire` already uses a different base URL; applying will replace it"
-            .into(),
-        blocking: false,
-    }])
+    if let Some(pointer) = recipe.selected_model
+        && let Some(current) = root.pointer(pointer)
+        && Some(current) != recipe.values.pointer(pointer)
+    {
+        conflicts.push(review_conflict(
+            recipe,
+            "selected model points to another provider; applying will replace it",
+        ));
+    }
+    Ok(conflicts)
 }
 
-fn client_warnings(
-    client: Client,
-    model: Option<&str>,
-    base_url: &str,
-    token: &str,
-) -> Vec<String> {
+fn review_conflict(recipe: &Recipe, reason: &'static str) -> Conflict {
+    Conflict {
+        client: recipe.client,
+        path: recipe.path.clone(),
+        reason: reason.into(),
+        blocking: false,
+    }
+}
+
+fn client_warnings(client: Client, base_url: &str, token: &str) -> Vec<String> {
     let mut warnings = client.environment_warnings(base_url, token);
     if client == Client::Codex {
         warnings.push(
             "Codex auth remains untouched; activate the isolated profile with --profile rewire"
                 .into(),
         );
-    }
-    if model.is_none() && matches!(client, Client::OpenCode | Client::OpenClaw) {
-        warnings.push(format!(
-            "{client} provider added without a model catalog; supply --model or select a model separately"
-        ));
     }
     warnings
 }

@@ -21,11 +21,13 @@ mod workflow;
 pub use clients::CLIENTS;
 pub use diagnostics::diagnose;
 pub use model::{
-    Action, Client, ClientDiagnostic, Conflict, DoctorReport, Format, Input, Plan, PlannedChange,
-    Recipe, RewireError, Secret, Transaction, TransactionEntry,
+    Action, Client, ClientDiagnostic, Conflict, DoctorReport, Format, Input, OpenCodeSdk, Plan,
+    PlannedChange, Recipe, RewireError, Secret, Transaction, TransactionEntry, validate_model_id,
+    validate_model_name,
 };
 pub use planner::{build_plan, build_remove_plan, detect_clients};
 pub use security::validate_base_url;
 pub use security::{home_from_override, read_token, redact, stable_json, transaction_root};
+pub use transaction::available_transactions;
 pub use transaction::{apply_plan, rollback};
 pub use workflow::run as run_workflow;

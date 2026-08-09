@@ -20,6 +20,8 @@ struct JournalManifest {
     id: String,
     entries: Vec<TransactionEntry>,
     committed: bool,
+    #[serde(default)]
+    rolled_back: bool,
     backup_key: Vec<u8>,
 }
 
@@ -149,6 +151,7 @@ fn write_journal(plan: &Plan, id: &str, dir: &Path) -> Result<Journal> {
             id: id.to_owned(),
             entries: entries.clone(),
             committed: false,
+            rolled_back: false,
             backup_key: backup_key.clone(),
         })?,
     )?;
@@ -187,6 +190,7 @@ fn apply_prepared_changes(
         id: id.to_owned(),
         entries: journal.entries.clone(),
         committed: true,
+        rolled_back: false,
         backup_key: journal.backup_key.clone(),
     };
     write_private_file(
@@ -216,8 +220,20 @@ fn restore_entries(home: &Path, entries: &[TransactionEntry], backup_key: &[u8])
 /// Returns an error when the journal is invalid, an adapter-owned field changed, or restoration
 /// fails. Every target is checked before the first write.
 pub fn rollback(home: &Path, id: &str) -> Result<()> {
+    validate_transaction_id(id)?;
     let dir = transaction_root(home).join(id);
-    let tx: JournalManifest = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
+    let mut tx: JournalManifest = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
+    if tx.id != id {
+        return Err(anyhow!(
+            "transaction manifest ID does not match requested ID"
+        ));
+    }
+    if !tx.committed {
+        return Err(anyhow!("transaction {id} was not committed"));
+    }
+    if tx.rolled_back {
+        return Err(anyhow!("transaction {id} was already rolled back"));
+    }
     let mut actions = Vec::new();
     for entry in tx.entries.iter().rev() {
         ensure_safe_path(home, &entry.path)?;
@@ -265,7 +281,79 @@ pub fn rollback(home: &Path, id: &str) -> Result<()> {
             current,
         });
     }
-    apply_rollback_actions(home, &actions)
+    apply_rollback_actions(home, &actions)?;
+    tx.rolled_back = true;
+    if let Err(error) =
+        write_private_file(dir.join("manifest.json"), &serde_json::to_vec_pretty(&tx)?)
+    {
+        let restore_result = actions
+            .iter()
+            .rev()
+            .try_for_each(|action| restore_snapshot(home, &action.path, &action.current));
+        return match restore_result {
+            Ok(()) => Err(anyhow!(
+                "rollback state could not be recorded; current files were restored: {error}"
+            )),
+            Err(restore_error) => Err(anyhow!(
+                "rollback state could not be recorded: {error}; restoring current files also failed: {restore_error}"
+            )),
+        };
+    }
+    Ok(())
+}
+
+/// List committed transactions that are still available for rollback, newest last.
+///
+/// # Errors
+///
+/// Returns an error when the transaction root or a readable journal cannot be inspected.
+pub fn available_transactions(home: &Path) -> Result<Vec<String>> {
+    let root = transaction_root(home);
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut ids = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().to_string();
+        if !is_transaction_id(&id) {
+            continue;
+        }
+        let manifest = match fs::read(entry.path().join("manifest.json")) {
+            Ok(bytes) => serde_json::from_slice::<JournalManifest>(&bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let Ok(manifest) = manifest else {
+            continue;
+        };
+        if manifest.id == id && manifest.committed && !manifest.rolled_back {
+            ids.push(id);
+        }
+    }
+    ids.sort_by_key(|id| transaction_sequence(id).unwrap_or_default());
+    Ok(ids)
+}
+
+fn validate_transaction_id(id: &str) -> Result<()> {
+    if is_transaction_id(id) {
+        Ok(())
+    } else {
+        Err(anyhow!("invalid transaction identifier: {id}"))
+    }
+}
+
+fn is_transaction_id(id: &str) -> bool {
+    id.strip_prefix("tx-").is_some_and(|sequence| {
+        !sequence.is_empty() && sequence.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+fn transaction_sequence(id: &str) -> Option<u128> {
+    id.strip_prefix("tx-")?.parse().ok()
 }
 
 fn apply_rollback_actions(home: &Path, actions: &[RollbackAction]) -> Result<()> {

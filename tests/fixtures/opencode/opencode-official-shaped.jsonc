@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "existing/coder-model",
+  "model": "existing/gpt-5.5",
   "provider": {
     "existing": {
       "npm": "@ai-sdk/openai-compatible",
@@ -10,7 +10,10 @@
         "apiKey": "{env:EXISTING_TOKEN}"
       },
       "models": {
-        "coder-model": {"name": "Coder Model"}
+        "gpt-5.5": {
+          "id": "gpt-5.5",
+          "name": "GPT-5.5"
+        }
       }
     }
   },

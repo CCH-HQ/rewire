@@ -13,6 +13,8 @@ fn plan_colors_create_and_summary_semantics() {
             token: Secret::new("color-secret").unwrap(),
             clients: vec![Client::Claude],
             model: None,
+            model_name: None,
+            sdk: None,
         },
     )
     .unwrap();
@@ -38,6 +40,8 @@ fn blocking_plan_reasons_use_danger_color() {
             token: Secret::new("color-secret").unwrap(),
             clients: vec![Client::Claude],
             model: None,
+            model_name: None,
+            sdk: None,
         },
     )
     .unwrap();
@@ -56,6 +60,8 @@ fn provider_overwrite_reasons_use_review_color() {
         token: Secret::new("color-secret").unwrap(),
         clients: vec![Client::OpenCode],
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     apply_plan(home.path(), &build_plan(home.path(), &initial).unwrap()).unwrap();
     let replacement = Input {
@@ -63,6 +69,8 @@ fn provider_overwrite_reasons_use_review_color() {
         token: Secret::new("color-secret").unwrap(),
         clients: vec![Client::OpenCode],
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(home.path(), &replacement).unwrap();
 

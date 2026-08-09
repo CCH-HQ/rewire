@@ -1,5 +1,6 @@
 use crate::{
-    Action, Client, Input, Plan, apply_plan, build_plan, detect_clients, validate_base_url,
+    Action, Client, Input, OpenCodeSdk, Plan, apply_plan, build_plan, detect_clients,
+    validate_base_url, validate_model_name,
 };
 use anstyle::{AnsiColor, Style};
 use anyhow::Result;
@@ -21,7 +22,9 @@ const CLIENT_PROMPT: &str = "Choose one or more clients";
 const BASE_URL_PROMPT: &str = "Compatible API base URL";
 const TOKEN_PROMPT: &str = "API token";
 const TOKEN_DISPLAY_MODE: PasswordDisplayMode = PasswordDisplayMode::Masked;
-const MODEL_PROMPT: &str = "Model ID (optional)";
+const MODEL_PROMPT: &str = "Model ID";
+const MODEL_NAME_PROMPT: &str = "Model display name (optional; Enter uses the ID)";
+const SDK_PROMPT: &str = "OpenCode AI SDK";
 const REVIEW_PROMPT: &str = "Confirm the numbered plan";
 const BLOCKED_PROMPT: &str = "Resolve blocking items before applying";
 const ACCENT: Style = AnsiColor::Cyan.on_default().bold();
@@ -36,6 +39,13 @@ enum ReviewAction {
     Finish,
     Edit,
     Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModelNameChoice {
+    Cancel,
+    Omit,
+    Value(String),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -273,24 +283,106 @@ fn collect_input(
         }
     };
 
-    let model = optional_prompt(
-        Text::new(MODEL_PROMPT)
-            .with_placeholder("Leave blank to add providers only")
-            .with_render_config(*render_config)
-            .prompt(),
-    )?
-    .map(|value| value.trim().to_owned())
-    .filter(|value| !value.is_empty());
+    let clients = selected
+        .into_iter()
+        .map(|option| CLIENTS[option.index])
+        .collect::<Vec<_>>();
+    let model = if clients.iter().copied().any(Client::requires_model) {
+        let Some(model) = prompt_model(render_config, palette)? else {
+            return Ok(None);
+        };
+        Some(model)
+    } else {
+        None
+    };
+    let sdk = if clients.contains(&Client::OpenCode) {
+        let Some(sdk) = prompt_sdk(model.as_deref(), render_config)? else {
+            return Ok(None);
+        };
+        Some(sdk)
+    } else {
+        None
+    };
+    let model_name = if clients
+        .iter()
+        .any(|client| matches!(client, Client::OpenCode | Client::OpenClaw))
+    {
+        match prompt_model_name(render_config, palette)? {
+            ModelNameChoice::Cancel => return Ok(None),
+            ModelNameChoice::Omit => None,
+            ModelNameChoice::Value(model_name) => Some(model_name),
+        }
+    } else {
+        None
+    };
 
     Ok(Some(Input {
         base_url,
         token,
-        clients: selected
-            .into_iter()
-            .map(|option| CLIENTS[option.index])
-            .collect(),
+        clients,
         model,
+        model_name,
+        sdk,
     }))
+}
+
+fn prompt_sdk(
+    model: Option<&str>,
+    render_config: &RenderConfig<'static>,
+) -> Result<Option<OpenCodeSdk>> {
+    let choices = OpenCodeSdk::choices();
+    let inferred = OpenCodeSdk::infer(model);
+    let cursor = choices
+        .iter()
+        .position(|choice| *choice == inferred)
+        .expect("the inferred OpenCode SDK must be present in the workflow choices");
+    optional_prompt(
+        Select::new(SDK_PROMPT, choices.to_vec())
+            // Put the likely wire protocol under the cursor while keeping the choice explicit.
+            .with_starting_cursor(cursor)
+            .with_render_config(*render_config)
+            .prompt(),
+    )
+}
+
+fn prompt_model(render_config: &RenderConfig<'static>, palette: Palette) -> Result<Option<String>> {
+    loop {
+        let result = Text::new(MODEL_PROMPT)
+            .with_placeholder("e.g. gpt-4.1-mini")
+            .with_render_config(*render_config)
+            .prompt();
+        let Some(value) = optional_prompt(result)? else {
+            return Ok(None);
+        };
+        let value = value.trim().to_owned();
+        match crate::validate_model_id(&value) {
+            Ok(()) => return Ok(Some(value)),
+            Err(error) => eprintln!("{}", palette.danger(format!("Invalid model ID: {error}"))),
+        }
+    }
+}
+
+fn prompt_model_name(
+    render_config: &RenderConfig<'static>,
+    palette: Palette,
+) -> Result<ModelNameChoice> {
+    loop {
+        let result = Text::new(MODEL_NAME_PROMPT)
+            .with_placeholder("e.g. GPT-5.5")
+            .with_render_config(*render_config)
+            .prompt();
+        let Some(value) = optional_prompt(result)? else {
+            return Ok(ModelNameChoice::Cancel);
+        };
+        let value = value.trim().to_owned();
+        if value.is_empty() {
+            return Ok(ModelNameChoice::Omit);
+        }
+        match validate_model_name(&value) {
+            Ok(()) => return Ok(ModelNameChoice::Value(value)),
+            Err(error) => eprintln!("{}", palette.danger(format!("Invalid model name: {error}"))),
+        }
+    }
 }
 
 fn optional_prompt<T>(result: std::result::Result<T, InquireError>) -> Result<Option<T>> {

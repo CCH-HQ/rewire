@@ -200,6 +200,21 @@ impl Output {
         write_stdout(&text)
     }
 
+    /// Render a human cancellation without turning an intentional `No` into an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when stdout cannot be written.
+    pub(crate) fn cancelled(self, message: &str) -> Result<()> {
+        if self.json {
+            return Self::json(&serde_json::json!({
+                "ok": true,
+                "cancelled": true,
+            }));
+        }
+        write_stdout(&format!("{}\n", self.palette.warning(message)))
+    }
+
     /// Render transaction backups for manual selection or automation.
     ///
     /// # Errors
@@ -234,15 +249,20 @@ impl Output {
 
     /// Print a runtime error as JSON for automation or colored text for an operator.
     pub(crate) fn error(error: &anyhow::Error, json: bool, color_requested: bool) {
+        let message = error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ");
         let text = if json {
             stable_json(&serde_json::json!({
                 "ok": false,
-                "error": error.to_string(),
+                "error": message,
             }))
             .expect("the fixed error payload is always JSON serializable")
         } else {
             let palette = Palette::stderr(color_requested);
-            format!("{} {error}\n", palette.danger("Error:"))
+            format!("{} {message}\n", palette.danger("Error:"))
         };
         let _ = io::stderr().lock().write_all(text.as_bytes());
     }
@@ -263,6 +283,18 @@ fn render_plan(plan: &Plan, palette: Palette) -> Result<String> {
             .collect::<Vec<_>>()
             .join(", ")
     )?;
+    if let Some(model) = &plan.model {
+        writeln!(text, "{} {}", palette.muted("Model ID:"), model)?;
+    }
+    if let Some(model_name) = &plan.model_name {
+        writeln!(text, "{} {}", palette.muted("Model name:"), model_name)?;
+    }
+    if let Some(sdk) = &plan.sdk {
+        writeln!(text, "{} {}", palette.muted("OpenCode SDK:"), sdk)?;
+    }
+    if plan.model.is_some() || plan.sdk.is_some() {
+        writeln!(text)?;
+    }
 
     let mut number = 1;
     for change in &plan.changes {

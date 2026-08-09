@@ -33,3 +33,5 @@ evidence matrix and known documentation drift are recorded in `docs/client-compa
 OpenCode 1.18.15 reports `/Users/esap/.config/opencode` as its global config directory. Its current
 loader prefers `opencode.jsonc`, then `opencode.json`, then the legacy `config.json` when choosing a
 global file to patch; the fixtures therefore exercise the preferred `opencode.jsonc` target.
+Its schema and provider loader keep the catalog key, API model ID, display name, and npm SDK
+package separate; the OpenCode fixture tests those distinctions with a GPT-shaped provider.

@@ -1,8 +1,10 @@
+use anyhow::Result;
 use clap::{
     Args, ColorChoice, CommandFactory, FromArgMatches, Parser, Subcommand,
     builder::{Styles, styling::AnsiColor},
 };
 use clap_complete::Shell;
+use inquire::{Confirm, InquireError, ui::RenderConfig};
 use std::path::PathBuf;
 
 const CLAP_STYLES: Styles = Styles::styled()
@@ -51,9 +53,15 @@ pub(crate) struct Cli {
     /// Comma-separated clients: claude,codex,opencode,hermes,openclaw.
     #[arg(long, global = true)]
     pub(crate) client: Option<String>,
-    /// Optional model ID for clients that require an explicit custom-model catalog.
+    /// Model ID required for opencode, hermes, and openclaw; Claude and Codex retain their model.
     #[arg(long, global = true)]
     pub(crate) model: Option<String>,
+    /// `OpenCode` or `OpenClaw` catalog display name; defaults to the provider-native model ID.
+    #[arg(long, global = true)]
+    pub(crate) model_name: Option<String>,
+    /// `OpenCode` AI SDK: openai, anthropic, google, or openai-compatible.
+    #[arg(long, global = true)]
+    pub(crate) sdk: Option<String>,
     #[command(flatten)]
     pub(crate) execution: ExecutionOptions,
     #[command(flatten)]
@@ -73,7 +81,7 @@ pub(crate) struct ExecutionOptions {
     /// Build and print a plan without changing configuration files.
     #[arg(long, global = true)]
     pub(crate) dry_run: bool,
-    /// Apply a conflict-free plan without an additional confirmation prompt.
+    /// Confirm an apply, remove, or latest rollback without an additional prompt.
     #[arg(long, global = true)]
     pub(crate) yes: bool,
 }
@@ -99,8 +107,8 @@ pub(crate) enum Command {
     Doctor,
     /// Restore files recorded by a committed transaction.
     Rollback {
-        /// Transaction identifier returned by a successful apply.
-        id: String,
+        /// Transaction identifier returned by a successful apply; defaults to the latest rollbackable transaction.
+        id: Option<String>,
     },
     /// Inspect transaction backups.
     Backup {
@@ -114,6 +122,29 @@ pub(crate) enum Command {
         /// Target shell.
         shell: Shell,
     },
+}
+
+/// Ask for an explicit human confirmation before rolling back the latest transaction.
+///
+/// # Errors
+///
+/// Returns an error when the terminal prompt cannot be rendered or read.
+pub(crate) fn confirm_latest_rollback(id: &str, color: bool) -> Result<bool> {
+    let prompt = format!("Rollback latest transaction {id}?");
+    let render_config = if color {
+        RenderConfig::default()
+    } else {
+        RenderConfig::empty()
+    };
+    match Confirm::new(&prompt)
+        .with_default(false)
+        .with_render_config(render_config)
+        .prompt()
+    {
+        Ok(confirmed) => Ok(confirmed),
+        Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[derive(Debug, Subcommand)]

@@ -31,7 +31,14 @@ pub(crate) fn run(mut cli: Cli) -> Result<()> {
         Some(Command::Configure) => configure::run(&home, &cli, interactive_terminal),
         Some(Command::Plan) => plan::run(&home, &mut cli, output),
         Some(Command::Doctor) => doctor::run(&home, output),
-        Some(Command::Rollback { id }) => rollback::run(&home, &id, output),
+        Some(Command::Rollback { id }) => rollback::run(
+            &home,
+            id.as_deref(),
+            output,
+            interactive_terminal && !cli.execution.non_interactive && !cli.display.json,
+            cli.execution.yes,
+            !cli.display.no_color,
+        ),
         Some(Command::Remove) => remove::run(&home, &mut cli, output),
         Some(Command::Completions { shell }) => {
             completions::run(shell);

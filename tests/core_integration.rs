@@ -31,6 +31,47 @@ fn validates_and_normalizes_base_url_without_forcing_version_path() {
 }
 
 #[test]
+fn model_selection_is_required_and_validated_at_the_core_boundary() {
+    for client in [Client::OpenCode, Client::Hermes, Client::OpenClaw] {
+        let dir = tempdir().unwrap();
+        let error = build_plan(
+            dir.path(),
+            &Input {
+                base_url: "https://gateway.example".into(),
+                token: Secret::new("secret").unwrap(),
+                clients: vec![client],
+                model: None,
+                model_name: None,
+                sdk: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--model is required"));
+        assert!(!dir.path().join(".config/rewire").exists());
+    }
+
+    for invalid in [
+        "",
+        " coder-model",
+        "coder-model ",
+        "rewire/coder-model",
+        "bad\nmodel",
+    ] {
+        assert!(validate_model_id(invalid).is_err(), "accepted {invalid:?}");
+    }
+    for valid in ["coder-model", "gpt-4.1-mini", "upstream/model-id"] {
+        validate_model_id(valid).unwrap();
+    }
+    for invalid in ["", " GPT-5.5", "GPT-5.5 ", "GPT\n5.5"] {
+        assert!(
+            validate_model_name(invalid).is_err(),
+            "accepted {invalid:?}"
+        );
+    }
+    assert!(OpenCodeSdk::parse("unknown-sdk").is_err());
+}
+
+#[test]
 fn merge_preserves_unknown_json_fields() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".claude/settings.json");
@@ -41,6 +82,8 @@ fn merge_preserves_unknown_json_fields() {
         token: Secret::new("s3cr3t").unwrap(),
         clients: vec![Client::Claude],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     apply_plan(dir.path(), &plan).unwrap();
@@ -82,10 +125,7 @@ fn codex_and_opencode_recipes_follow_current_official_provider_shapes() {
         codex.pointer("/profiles/rewire/model_provider").unwrap(),
         "rewire"
     );
-    assert_eq!(
-        codex.pointer("/profiles/rewire/model").unwrap(),
-        "coder-model"
-    );
+    assert!(codex.pointer("/profiles/rewire/model").is_none());
 
     let opencode_recipes = Client::OpenCode.recipes(home, endpoint, "TOKEN", Some("coder-model"));
     let opencode_recipe = &opencode_recipes[0];
@@ -94,6 +134,7 @@ fn codex_and_opencode_recipes_follow_current_official_provider_shapes() {
         home.join(".config/opencode/opencode.jsonc")
     );
     let opencode = &opencode_recipe.values;
+    assert_eq!(opencode.pointer("/model").unwrap(), "rewire/coder-model");
     assert_eq!(
         opencode.pointer("/provider/rewire/npm").unwrap(),
         "@ai-sdk/openai-compatible"
@@ -111,6 +152,42 @@ fn codex_and_opencode_recipes_follow_current_official_provider_shapes() {
             .pointer("/provider/rewire/models/coder-model/name")
             .unwrap(),
         "coder-model"
+    );
+}
+
+#[test]
+fn opencode_separates_model_id_display_name_and_sdk_package() {
+    let home = std::path::Path::new("/fixture-home");
+    let recipes = Client::OpenCode.recipes_with_options(
+        home,
+        "https://gateway.example/v1",
+        "TOKEN",
+        Some("gpt-5.5"),
+        Some("GPT-5.5"),
+        Some(OpenCodeSdk::OpenAi),
+    );
+    let config = &recipes[0].values;
+    assert_eq!(config["model"], "rewire/gpt-5.5");
+    assert_eq!(config["provider"]["rewire"]["npm"], "@ai-sdk/openai");
+    assert_eq!(
+        config["provider"]["rewire"]["models"]["gpt-5.5"]["name"],
+        "GPT-5.5"
+    );
+    assert_eq!(
+        OpenCodeSdk::parse("@ai-sdk/anthropic").unwrap(),
+        OpenCodeSdk::Anthropic
+    );
+    assert_eq!(
+        OpenCodeSdk::infer(Some("claude-sonnet-4-5")).npm(),
+        "@ai-sdk/anthropic"
+    );
+    assert_eq!(
+        OpenCodeSdk::infer(Some("gemini-3-pro")).npm(),
+        "@ai-sdk/google"
+    );
+    assert_eq!(
+        OpenCodeSdk::infer(Some("custom-model")).npm(),
+        "@ai-sdk/openai-compatible"
     );
 }
 
@@ -133,6 +210,8 @@ fn hermes_and_openclaw_recipes_follow_current_official_provider_shapes() {
         hermes.pointer("/providers/rewire/default_model").unwrap(),
         "coder-model"
     );
+    assert_eq!(hermes.pointer("/model/provider").unwrap(), "rewire");
+    assert_eq!(hermes.pointer("/model/name").unwrap(), "coder-model");
     assert_eq!(hermes_recipes[1].path, home.join(".hermes/.env"));
 
     let openclaw_recipes = Client::OpenClaw.recipes(home, endpoint, "TOKEN", Some("coder-model"));
@@ -158,6 +237,10 @@ fn hermes_and_openclaw_recipes_follow_current_official_provider_shapes() {
             .pointer("/models/providers/rewire/models/0/id")
             .unwrap(),
         "coder-model"
+    );
+    assert_eq!(
+        openclaw.pointer("/agents/defaults/model/primary").unwrap(),
+        "rewire/coder-model"
     );
     assert_eq!(
         openclaw_recipes[1].path,
@@ -191,13 +274,16 @@ fn rollback_refuses_when_user_changed_owned_file() {
         base_url: "http://localhost:9000".into(),
         token: Secret::new("token").unwrap(),
         clients: vec![Client::OpenCode],
-        model: None,
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     let tx = apply_plan(dir.path(), &plan).unwrap();
-    let path = Client::OpenCode.recipes(dir.path(), &plan.base_url, "token", None)[0]
-        .path
-        .clone();
+    let path = Client::OpenCode.recipes(dir.path(), &plan.base_url, "token", Some("coder-model"))
+        [0]
+    .path
+    .clone();
     fs::write(&path, br#"{"manual":true}"#).unwrap();
     assert!(rollback(dir.path(), &tx.id).is_err());
     assert_eq!(fs::read(&path).unwrap(), br#"{"manual":true}"#);
@@ -223,6 +309,8 @@ fn three_way_jsonc_rollback_preserves_later_unrelated_fields_and_comments() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::OpenCode],
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let tx = apply_plan(dir.path(), &build_plan(dir.path(), &input).unwrap()).unwrap();
     let applied = fs::read_to_string(&config).unwrap();
@@ -255,6 +343,8 @@ fn three_way_toml_rollback_preserves_later_unrelated_table() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Codex],
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let tx = apply_plan(dir.path(), &build_plan(dir.path(), &input).unwrap()).unwrap();
     let mut edited = fs::read_to_string(&config).unwrap();
@@ -284,6 +374,8 @@ fn three_way_hermes_rollback_preserves_yaml_and_dotenv_edits() {
         token: Secret::new("new-token").unwrap(),
         clients: vec![Client::Hermes],
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let tx = apply_plan(dir.path(), &build_plan(dir.path(), &input).unwrap()).unwrap();
     let mut yaml_edit = fs::read_to_string(&config).unwrap();
@@ -320,7 +412,9 @@ fn json5_comments_and_unknown_fields_survive_structured_merge() {
         base_url: "https://gateway.local".into(),
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::OpenCode],
-        model: None,
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     apply_plan(dir.path(), &plan).unwrap();
@@ -345,6 +439,8 @@ fn symlinked_configuration_target_is_rejected_before_write() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Claude],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     assert_eq!(plan.conflicts.len(), 1);
@@ -367,6 +463,8 @@ fn malformed_configuration_is_reported_as_a_blocking_plan_conflict() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Claude],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     assert!(plan.changes.is_empty());
@@ -390,6 +488,8 @@ fn read_only_configuration_is_reported_before_apply() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Claude],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     assert_eq!(plan.conflicts.len(), 1);
@@ -404,6 +504,8 @@ fn all_client_recipes_write_parseable_configurations() {
         token: Secret::new("secret").unwrap(),
         clients: CLIENTS.to_vec(),
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     let tx = apply_plan(dir.path(), &plan).unwrap();
@@ -443,6 +545,8 @@ fn applying_same_plan_again_is_a_noop() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Codex],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let first = build_plan(dir.path(), &input).unwrap();
     apply_plan(dir.path(), &first).unwrap();
@@ -465,6 +569,8 @@ fn existing_rewire_providers_with_the_same_url_are_idempotent_for_every_adapter(
             token: Secret::new("secret").unwrap(),
             clients: vec![client],
             model: Some("coder-model".into()),
+            model_name: None,
+            sdk: None,
         };
         apply_plan(dir.path(), &build_plan(dir.path(), &initial).unwrap()).unwrap();
 
@@ -474,6 +580,8 @@ fn existing_rewire_providers_with_the_same_url_are_idempotent_for_every_adapter(
             token: Secret::new("secret").unwrap(),
             clients: vec![client],
             model: Some("coder-model".into()),
+            model_name: None,
+            sdk: None,
         };
         let plan = build_plan(dir.path(), &repeated).unwrap();
         assert!(
@@ -503,6 +611,8 @@ fn existing_rewire_providers_with_a_different_url_require_review_for_every_adapt
             token: Secret::new("secret").unwrap(),
             clients: vec![client],
             model: Some("coder-model".into()),
+            model_name: None,
+            sdk: None,
         };
         apply_plan(dir.path(), &build_plan(dir.path(), &initial).unwrap()).unwrap();
 
@@ -511,6 +621,8 @@ fn existing_rewire_providers_with_a_different_url_require_review_for_every_adapt
             token: Secret::new("secret").unwrap(),
             clients: vec![client],
             model: Some("coder-model".into()),
+            model_name: None,
+            sdk: None,
         };
         let plan = build_plan(dir.path(), &replacement).unwrap();
         assert_eq!(plan.conflicts.len(), 1, "{client} review count");
@@ -529,6 +641,35 @@ fn existing_rewire_providers_with_a_different_url_require_review_for_every_adapt
 }
 
 #[test]
+fn replacing_a_client_selected_model_requires_review_in_each_native_format() {
+    for client in [Client::OpenCode, Client::Hermes, Client::OpenClaw] {
+        let dir = tempdir().unwrap();
+        let initial = Input {
+            base_url: "https://gateway.example/v1".into(),
+            token: Secret::new("secret").unwrap(),
+            clients: vec![client],
+            model: Some("old-model".into()),
+            model_name: None,
+            sdk: None,
+        };
+        apply_plan(dir.path(), &build_plan(dir.path(), &initial).unwrap()).unwrap();
+
+        let replacement = Input {
+            base_url: initial.base_url.clone(),
+            token: Secret::new("secret").unwrap(),
+            clients: vec![client],
+            model: Some("new-model".into()),
+            model_name: None,
+            sdk: None,
+        };
+        let plan = build_plan(dir.path(), &replacement).unwrap();
+        assert_eq!(plan.conflicts.len(), 1, "{client} review count");
+        assert!(!plan.conflicts[0].blocking);
+        assert!(plan.conflicts[0].reason.contains("selected model"));
+    }
+}
+
+#[test]
 fn apply_rejects_a_file_changed_after_planning() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".claude/settings.json");
@@ -539,6 +680,8 @@ fn apply_rejects_a_file_changed_after_planning() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Claude],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     fs::write(&path, br#"{"operator":false,"edited":true}"#).unwrap();
@@ -563,6 +706,8 @@ fn apply_and_rollback_preserve_unix_file_mode() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Claude],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     let tx = apply_plan(dir.path(), &plan).unwrap();
@@ -588,6 +733,8 @@ fn later_write_failure_restores_earlier_replacements() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::Claude, Client::Codex],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     assert!(apply_plan(dir.path(), &plan).is_err());
@@ -603,6 +750,8 @@ fn credential_files_make_environment_references_persistent() {
         token: Secret::new("persistent-token").unwrap(),
         clients: vec![Client::OpenCode, Client::Hermes, Client::OpenClaw],
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     let tx = apply_plan(dir.path(), &plan).unwrap();
@@ -638,7 +787,9 @@ fn hermes_dotenv_merge_preserves_unrelated_values_and_special_token_bytes() {
         base_url: "https://gateway.example".into(),
         token: Secret::new(token).unwrap(),
         clients: vec![Client::Hermes],
-        model: None,
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     apply_plan(dir.path(), &plan).unwrap();
@@ -663,7 +814,9 @@ fn a_secret_file_write_failure_restores_the_primary_config() {
         base_url: "https://gateway.example".into(),
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::OpenCode],
-        model: None,
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     assert!(apply_plan(dir.path(), &plan).is_err());
@@ -682,6 +835,8 @@ fn rollback_removes_primary_and_secret_files_created_together() {
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::OpenCode],
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     let tx = apply_plan(dir.path(), &plan).unwrap();
@@ -708,6 +863,8 @@ fn remove_plan_deletes_only_adapter_owned_fields_and_can_be_rolled_back() {
         token: Secret::new("remove-secret").unwrap(),
         clients: CLIENTS.to_vec(),
         model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let configured = apply_plan(dir.path(), &build_plan(dir.path(), &input).unwrap()).unwrap();
     let remove_plan = build_remove_plan(dir.path(), CLIENTS).unwrap();
@@ -735,9 +892,11 @@ fn remove_plan_deletes_only_adapter_owned_fields_and_can_be_rolled_back() {
     )
     .unwrap();
     assert!(opencode.pointer("/provider/rewire").is_none());
+    assert!(opencode.pointer("/model").is_none());
     let hermes: Value =
         serde_yaml::from_slice(&fs::read(dir.path().join(".hermes/config.yaml")).unwrap()).unwrap();
     assert!(hermes.pointer("/providers/rewire").is_none());
+    assert!(hermes.pointer("/model").is_none());
     assert!(
         !fs::read_to_string(dir.path().join(".hermes/.env"))
             .unwrap()
@@ -747,6 +906,7 @@ fn remove_plan_deletes_only_adapter_owned_fields_and_can_be_rolled_back() {
         serde_json::from_slice(&fs::read(dir.path().join(".openclaw/openclaw.json")).unwrap())
             .unwrap();
     assert!(openclaw.pointer("/models/providers/rewire").is_none());
+    assert!(openclaw.pointer("/agents/defaults/model/primary").is_none());
     assert!(
         !dir.path()
             .join(".config/rewire/secrets/opencode-token")
@@ -764,6 +924,63 @@ fn remove_plan_deletes_only_adapter_owned_fields_and_can_be_rolled_back() {
         b"remove-secret"
     );
     rollback(dir.path(), &configured.id).unwrap();
+}
+
+#[test]
+fn remove_preserves_model_selections_changed_to_another_provider() {
+    let dir = tempdir().unwrap();
+    let clients = [Client::OpenCode, Client::Hermes, Client::OpenClaw];
+    let input = Input {
+        base_url: "https://gateway.example/v1".into(),
+        token: Secret::new("remove-secret").unwrap(),
+        clients: clients.to_vec(),
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
+    };
+    apply_plan(dir.path(), &build_plan(dir.path(), &input).unwrap()).unwrap();
+
+    let opencode_path = dir.path().join(".config/opencode/opencode.jsonc");
+    let mut opencode: Value = serde_json::from_slice(&fs::read(&opencode_path).unwrap()).unwrap();
+    opencode["model"] = Value::String("other/coder-model".into());
+    fs::write(
+        &opencode_path,
+        serde_json::to_vec_pretty(&opencode).unwrap(),
+    )
+    .unwrap();
+
+    let hermes_path = dir.path().join(".hermes/config.yaml");
+    let mut hermes: Value = serde_yaml::from_slice(&fs::read(&hermes_path).unwrap()).unwrap();
+    hermes["model"] = serde_json::json!({"provider": "other", "name": "coder-model"});
+    fs::write(&hermes_path, serde_yaml::to_string(&hermes).unwrap()).unwrap();
+
+    let openclaw_path = dir.path().join(".openclaw/openclaw.json");
+    let mut openclaw: Value = serde_json::from_slice(&fs::read(&openclaw_path).unwrap()).unwrap();
+    openclaw["agents"]["defaults"]["model"]["primary"] = Value::String("other/coder-model".into());
+    fs::write(
+        &openclaw_path,
+        serde_json::to_vec_pretty(&openclaw).unwrap(),
+    )
+    .unwrap();
+
+    apply_plan(
+        dir.path(),
+        &build_remove_plan(dir.path(), &clients).unwrap(),
+    )
+    .unwrap();
+
+    let opencode: Value = serde_json::from_slice(&fs::read(opencode_path).unwrap()).unwrap();
+    assert_eq!(opencode["model"], "other/coder-model");
+    assert!(opencode.pointer("/provider/rewire").is_none());
+    let hermes: Value = serde_yaml::from_slice(&fs::read(hermes_path).unwrap()).unwrap();
+    assert_eq!(hermes["model"]["provider"], "other");
+    assert!(hermes.pointer("/providers/rewire").is_none());
+    let openclaw: Value = serde_json::from_slice(&fs::read(openclaw_path).unwrap()).unwrap();
+    assert_eq!(
+        openclaw["agents"]["defaults"]["model"]["primary"],
+        "other/coder-model"
+    );
+    assert!(openclaw.pointer("/models/providers/rewire").is_none());
 }
 
 #[test]
@@ -822,6 +1039,8 @@ fn plans_debug_output_and_encrypted_backups_do_not_contain_tokens() {
         token: Secret::new(token).unwrap(),
         clients: vec![Client::Claude],
         model: None,
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     assert!(!format!("{plan:?}").contains(token));
@@ -852,7 +1071,9 @@ fn secret_targets_and_transaction_artifacts_are_private() {
         base_url: "https://gateway.example".into(),
         token: Secret::new("secret").unwrap(),
         clients: vec![Client::OpenCode],
-        model: None,
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
     };
     let plan = build_plan(dir.path(), &input).unwrap();
     let tx = apply_plan(dir.path(), &plan).unwrap();

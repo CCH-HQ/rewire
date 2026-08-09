@@ -11,10 +11,33 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
 mod support;
 use support::fixtures::CLIENT_FIXTURES;
+
+fn apply_claude(home: &Path, base_url: &str, token: &str) -> Value {
+    let output = Command::cargo_bin("rewire")
+        .unwrap()
+        .args([
+            "--baseurl",
+            base_url,
+            "--token",
+            token,
+            "--client",
+            "claude",
+            "--home",
+        ])
+        .arg(home)
+        .args(["--yes", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap()
+}
 
 #[test]
 fn dry_run_json_is_structured_and_never_leaks_token() {
@@ -53,9 +76,11 @@ fn apply_then_rollback_restores_missing_file() {
             "--baseurl",
             "http://localhost:8080",
             "--token",
-            "model-hint-secret",
+            "rollback-secret",
             "--client",
             "opencode",
+            "--model",
+            "coder-model",
             "--home",
         ])
         .arg(home.path())
@@ -79,6 +104,159 @@ fn apply_then_rollback_restores_missing_file() {
         .stdout(predicate::str::contains("Rewire rollback"))
         .stdout(predicate::str::contains("Restored transaction"));
     assert!(!config.exists());
+}
+
+#[test]
+fn rollback_without_id_uses_the_latest_transaction_with_yes() {
+    let home = tempdir().unwrap();
+    let first = apply_claude(home.path(), "https://first-gateway.example", "first-token");
+    let first_id = first["transaction"]["id"].as_str().unwrap().to_owned();
+
+    let second = apply_claude(
+        home.path(),
+        "https://second-gateway.example",
+        "second-token",
+    );
+    let second_id = second["transaction"]["id"].as_str().unwrap().to_owned();
+
+    let rollback = Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--home"])
+        .arg(home.path())
+        .args(["rollback", "--yes", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rollback: Value = serde_json::from_slice(&rollback).unwrap();
+    assert_eq!(rollback["rolled_back"], second_id);
+    assert_ne!(rollback["rolled_back"], first_id);
+
+    let config: Value =
+        serde_json::from_slice(&fs::read(home.path().join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        config["env"]["ANTHROPIC_BASE_URL"],
+        "https://first-gateway.example"
+    );
+
+    let backups = Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--home"])
+        .arg(home.path())
+        .args(["backup", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let backups: Value = serde_json::from_slice(&backups).unwrap();
+    assert!(
+        backups["transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == &first_id)
+    );
+    assert!(
+        !backups["transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == &second_id)
+    );
+
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--home"])
+        .arg(home.path())
+        .args(["rollback", &second_id, "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("was already rolled back"));
+
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--home"])
+        .arg(home.path())
+        .args(["rollback", "../outside", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid transaction identifier"));
+}
+
+#[test]
+fn rollback_without_id_requires_yes_outside_a_terminal() {
+    let home = tempdir().unwrap();
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args([
+            "--baseurl",
+            "https://gateway.example",
+            "--token",
+            "rollback-input",
+            "--client",
+            "claude",
+            "--home",
+        ])
+        .arg(home.path())
+        .args(["--yes", "--json"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--home"])
+        .arg(home.path())
+        .arg("rollback")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "transaction ID is required outside an interactive terminal",
+        ));
+}
+
+#[test]
+fn rollback_without_id_reports_an_empty_transaction_history() {
+    let home = tempdir().unwrap();
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--home"])
+        .arg(home.path())
+        .args(["rollback", "--yes", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no committed transactions are available to roll back",
+        ));
+}
+
+#[test]
+fn rollback_reports_the_owned_field_when_three_way_merge_stops() {
+    let home = tempdir().unwrap();
+    let applied = apply_claude(
+        home.path(),
+        "https://gateway.example",
+        "rollback-diagnostic",
+    );
+    let id = applied["transaction"]["id"].as_str().unwrap();
+    let config = home.path().join(".claude/settings.json");
+    fs::write(
+        &config,
+        br#"{"env":{"ANTHROPIC_BASE_URL":"https://operator.example","ANTHROPIC_AUTH_TOKEN":"operator-token"}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--home"])
+        .arg(home.path())
+        .args(["rollback", id, "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("adapter-owned field"))
+        .stderr(predicate::str::contains("/env/"));
 }
 
 #[test]
@@ -445,7 +623,7 @@ fn client_location_environment_selects_the_effective_primary_config() {
         ] {
             command.env_remove(name);
         }
-        let output = command
+        command
             .env("HOME", home.path())
             .env(variable, &value)
             .args([
@@ -457,7 +635,11 @@ fn client_location_environment_selects_the_effective_primary_config() {
                 client,
                 "--home",
             ])
-            .arg(home.path())
+            .arg(home.path());
+        if matches!(client, "opencode" | "hermes" | "openclaw") {
+            command.args(["--model", "coder-model"]);
+        }
+        let output = command
             .args(["--dry-run", "--json"])
             .assert()
             .success()
@@ -491,6 +673,8 @@ fn client_location_environment_cannot_escape_the_selected_home() {
             "location-secret",
             "--client",
             "opencode",
+            "--model",
+            "coder-model",
             "--home",
         ])
         .arg(home.path())
@@ -604,6 +788,8 @@ fn apply_defaults_to_human_output() {
             "apply-secret",
             "--client",
             "opencode",
+            "--model",
+            "coder-model",
             "--home",
         ])
         .arg(home.path())
@@ -647,7 +833,7 @@ fn token_stdin_and_baseurl_environment_are_supported() {
 }
 
 #[test]
-fn model_hint_is_part_of_the_stable_plan_contract() {
+fn model_selection_is_part_of_the_stable_plan_contract() {
     let home = tempdir().unwrap();
     let output = Command::cargo_bin("rewire")
         .unwrap()
@@ -655,7 +841,7 @@ fn model_hint_is_part_of_the_stable_plan_contract() {
             "--baseurl",
             "https://gateway.example",
             "--token",
-            "TOKEN",
+            "model-selection-secret",
             "--client",
             "opencode,openclaw",
             "--model",
@@ -671,8 +857,101 @@ fn model_hint_is_part_of_the_stable_plan_contract() {
         .clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["model"], "coder-model");
+    assert_eq!(value["sdk"], "@ai-sdk/openai-compatible");
     assert_eq!(value["changes"].as_array().unwrap().len(), 4);
-    assert!(!String::from_utf8_lossy(&output).contains("model-hint-secret"));
+    assert!(!String::from_utf8_lossy(&output).contains("model-selection-secret"));
+}
+
+#[test]
+fn opencode_cli_accepts_explicit_sdk_and_display_name() {
+    let home = tempdir().unwrap();
+    let output = Command::cargo_bin("rewire")
+        .unwrap()
+        .args([
+            "--baseurl",
+            "https://gateway.example/v1",
+            "--token",
+            "sdk-secret",
+            "--client",
+            "opencode",
+            "--model",
+            "gpt-5.5",
+            "--model-name",
+            "GPT-5.5",
+            "--sdk",
+            "openai",
+            "--home",
+        ])
+        .arg(home.path())
+        .args(["plan", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["model_name"], "GPT-5.5");
+    assert_eq!(value["sdk"], "@ai-sdk/openai");
+    assert!(text.contains("@ai-sdk/openai"));
+    assert!(!text.contains("sdk-secret"));
+}
+
+#[test]
+fn required_model_clients_fail_before_planning_or_writing() {
+    for client in ["opencode", "hermes", "openclaw"] {
+        let home = tempdir().unwrap();
+        Command::cargo_bin("rewire")
+            .unwrap()
+            .args([
+                "--baseurl",
+                "https://gateway.example",
+                "--token",
+                "TOKEN",
+                "--client",
+                client,
+                "--home",
+            ])
+            .arg(home.path())
+            .args(["plan", "--json"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--model is required"));
+        assert!(fs::read_dir(home.path()).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn claude_and_codex_preserve_model_selection_even_when_model_is_supplied() {
+    let home = tempdir().unwrap();
+    let codex = home.path().join(".codex/config.toml");
+    fs::create_dir_all(codex.parent().unwrap()).unwrap();
+    fs::write(&codex, "model = \"existing-model\"\n").unwrap();
+    let output = Command::cargo_bin("rewire")
+        .unwrap()
+        .args([
+            "--baseurl",
+            "https://gateway.example",
+            "--token",
+            "TOKEN",
+            "--client",
+            "claude,codex",
+            "--model",
+            "ignored-model",
+            "--home",
+        ])
+        .arg(home.path())
+        .args(["--yes", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert!(value["plan"].get("model").is_none());
+    let codex: Value = toml_edit::de::from_slice(&fs::read(codex).unwrap()).unwrap();
+    assert_eq!(codex["model"], "existing-model");
+    assert!(codex.pointer("/profiles/rewire/model").is_none());
 }
 
 #[test]
@@ -759,8 +1038,8 @@ fn real_client_fixtures_keep_unrelated_configuration() {
             &target_path,
         )
         .unwrap();
-        let output = Command::cargo_bin("rewire")
-            .unwrap()
+        let mut command = Command::cargo_bin("rewire").unwrap();
+        command
             .args([
                 "--baseurl",
                 "https://fixture-gateway.example",
@@ -770,7 +1049,11 @@ fn real_client_fixtures_keep_unrelated_configuration() {
                 case.client,
                 "--home",
             ])
-            .arg(home.path())
+            .arg(home.path());
+        if matches!(case.client, "opencode" | "hermes" | "openclaw") {
+            command.args(["--model", "fixture-model"]);
+        }
+        let output = command
             .args(["--yes", "--json"])
             .assert()
             .success()
