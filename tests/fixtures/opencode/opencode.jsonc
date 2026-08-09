@@ -1,0 +1,9 @@
+{
+  // Operator-owned comment stays attached to the provider section.
+  "theme": "dark",
+  "provider": {
+    "existing": {
+      "name": "Existing"
+    }
+  }
+}

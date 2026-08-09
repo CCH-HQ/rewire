@@ -1,0 +1,8 @@
+model = "gpt-5"
+
+[model_providers.existing]
+name = "Existing gateway"
+base_url = "https://existing.example/v1"
+
+[history]
+save_history = true

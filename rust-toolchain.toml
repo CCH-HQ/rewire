@@ -1,0 +1,5 @@
+[toolchain]
+# Pin development and CI checks to the declared MSRV instead of a drifting local stable.
+channel = "1.94.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

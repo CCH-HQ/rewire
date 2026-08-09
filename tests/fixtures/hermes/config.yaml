@@ -1,0 +1,9 @@
+version: 1
+providers:
+  existing:
+    name: Existing
+    api: https://existing.example/v1
+    key_env: EXISTING_TOKEN
+    transport: chat_completions
+features:
+  audit: true

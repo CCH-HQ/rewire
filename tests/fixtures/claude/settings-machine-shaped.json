@@ -1,0 +1,29 @@
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "${ANTHROPIC_AUTH_TOKEN}",
+    "ANTHROPIC_BASE_URL": "https://existing-gateway.example/v1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
+  },
+  "permissions": {
+    "allow": ["Bash(cargo test:*)", "Read(./docs/**)"],
+    "deny": ["Read(./.env)"]
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "notify-send claude"}]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "statusline --compact"
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
+  },
+  "model": "claude-sonnet",
+  "autoCompactEnabled": true
+}

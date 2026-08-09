@@ -1,0 +1,31 @@
+{
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "existing-proxy": {
+        "baseUrl": "https://existing-gateway.example/v1",
+        "apiKey": "${EXISTING_TOKEN}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "coder-model",
+            "name": "Coder Model",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "~/workspace",
+      "model": {"primary": "existing-proxy/coder-model"}
+    }
+  },
+  "gateway": {
+    "reload": true
+  }
+}

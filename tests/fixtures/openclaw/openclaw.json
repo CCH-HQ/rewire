@@ -1,0 +1,15 @@
+{
+  "gateway": {
+    "reload": true
+  },
+  "models": {
+    "providers": {
+      "existing": {
+        "baseUrl": "https://existing.example/v1",
+        "apiKey": "${EXISTING_TOKEN}",
+        "api": "openai-completions",
+        "models": []
+      }
+    }
+  }
+}

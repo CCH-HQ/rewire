@@ -1,0 +1,79 @@
+[package]
+name = "rewire"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+description = "Vendor-neutral AI client configuration planner and transaction engine"
+license = "MIT"
+authors = [
+    "AptS-1547 <apts-1547@esaps.net>",
+    "AptS-1548 <apts-1548@esaps.net>",
+]
+repository = "https://github.com/AptS-1547/rewire"
+homepage = "https://github.com/AptS-1547/rewire"
+keywords = ["ai", "client", "configuration", "planner", "transaction", "engine"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+
+[profile.dev]
+opt-level = 1
+lto = false
+codegen-units = 16
+panic = "unwind"
+strip = false
+incremental = true
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release-debug]
+inherits = "release"
+codegen-units = 1
+debug = true
+strip = false
+lto = false
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# Crate roots carry deny overrides because editor Cargo schemas lag lint priority tables.
+pedantic = "warn"
+
+[dependencies]
+anyhow = "1"
+anstyle = "1"
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+clap_complete = "4.6"
+directories = "6"
+fs2 = "0.4"
+inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonc-parser = { version = "0.33", features = ["cst", "serde_json"] }
+serde_yaml = "0.9"
+sha2 = "0.11"
+tempfile = "3"
+toml_edit = { version = "0.25", features = ["serde"] }
+thiserror = "2"
+url = "2"
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+dotenvy = "0.15"
+predicates = "3"
+tempfile = "3"
+
+[lib]
+name = "rewire"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rewire"
+path = "src/main.rs"

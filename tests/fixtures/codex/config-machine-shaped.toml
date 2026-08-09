@@ -1,0 +1,25 @@
+model = "gpt-5"
+model_provider = "existing"
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+
+[features]
+hooks = true
+plan_tool = true
+view_image_tool = true
+
+[mcp_servers.docs]
+command = "docs-server"
+args = ["--stdio"]
+
+[model_providers.existing]
+name = "Existing gateway"
+base_url = "https://existing-gateway.example/v1"
+requires_openai_auth = false
+wire_api = "responses"
+
+[projects."/workspace/aster"]
+trust_level = "trusted"
+
+[tui]
+terminal_title = false

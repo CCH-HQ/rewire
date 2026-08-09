@@ -1,0 +1,18 @@
+model:
+  provider: existing
+  name: coder-model
+providers:
+  existing:
+    name: Existing compatible provider
+    api: https://existing-gateway.example/v1
+    key_env: EXISTING_TOKEN
+    transport: chat_completions
+    default_model: coder-model
+terminal:
+  backend: local
+  persistent_shell: false
+compression:
+  enabled: true
+fallback_providers:
+  - provider: existing
+    model: fallback-model

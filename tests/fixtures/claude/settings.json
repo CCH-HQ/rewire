@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": ["git", "cargo test"]
+  },
+  "hooks": {
+    "Notification": ["notify.sh"]
+  }
+}

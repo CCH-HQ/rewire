@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "existing/coder-model",
+  "provider": {
+    "existing": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Existing compatible provider",
+      "options": {
+        "baseURL": "https://existing-gateway.example/v1",
+        "apiKey": "{env:EXISTING_TOKEN}"
+      },
+      "models": {
+        "coder-model": {"name": "Coder Model"}
+      }
+    }
+  },
+  "mcp": {
+    "docs": {
+      "type": "local",
+      "command": ["docs-server", "--stdio"]
+    }
+  },
+  "instructions": ["CONTRIBUTING.md"]
+}
