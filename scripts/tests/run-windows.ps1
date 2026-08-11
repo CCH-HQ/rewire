@@ -12,44 +12,13 @@ $PersistentInstall = Join-Path $TemporaryDirectory "must-not-be-used"
 
 New-Item -ItemType Directory -Path $Assets, $Package, $RunnerTemp | Out-Null
 try {
-    # Compile a test-only console fixture so argument and lifecycle checks stay out of Rust code.
-    $FixtureSource = @'
-using System;
-using System.Diagnostics;
-using System.IO;
-
-public static class RewireFixture
-{
-    public static int Main(string[] args)
-    {
-        var output = Environment.GetEnvironmentVariable("REWIRE_TEST_OUTPUT");
-        if (String.IsNullOrEmpty(output))
-        {
-            return 90;
-        }
-
-        using (var writer = new StreamWriter(output, false))
-        {
-            writer.WriteLine("executable=" + Process.GetCurrentProcess().MainModule.FileName);
-            foreach (var argument in args)
-            {
-                writer.WriteLine("argument=" + argument);
-            }
-        }
-
-        if (args.Length >= 2 && args[0] == "--fixture-exit")
-        {
-            return Int32.Parse(args[1]);
-        }
-        return 0;
-    }
-}
-'@
+    # Compile the isolated fixture with the CI toolchain; no test hook enters the Rewire binary.
+    $FixtureSource = Join-Path $Root "scripts\tests\fixtures\runner.rs"
     $FixtureBinary = Join-Path $Package "rewire.exe"
-    Add-Type `
-        -TypeDefinition $FixtureSource `
-        -OutputAssembly $FixtureBinary `
-        -OutputType ConsoleApplication
+    & rustc $FixtureSource --edition 2024 -o $FixtureBinary
+    if ($LASTEXITCODE -ne 0) {
+        throw "could not compile the run-only fixture"
+    }
 
     $Asset = "rewire-x86_64-pc-windows-msvc.zip"
     Compress-Archive -Path (Join-Path $Package "*") -DestinationPath (Join-Path $Assets $Asset)
