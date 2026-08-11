@@ -891,9 +891,15 @@ fn opencode_cli_accepts_explicit_sdk_and_display_name() {
         .clone();
     let text = String::from_utf8(output).unwrap();
     let value: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(value["model_name"], "GPT-5.5");
+    assert!(value.get("model_name").is_none());
     assert_eq!(value["sdk"], "@ai-sdk/openai");
     assert!(text.contains("@ai-sdk/openai"));
+    assert!(value["warnings"].as_array().unwrap().iter().any(|warning| {
+        warning
+            .as_str()
+            .unwrap()
+            .contains("native provider manages model display names")
+    }));
     assert!(!text.contains("sdk-secret"));
 }
 
@@ -1136,6 +1142,7 @@ fn piped_help_is_readable_without_terminal_color_sequences() {
         .stdout(predicate::str::contains("Usage:"))
         .stdout(predicate::str::contains("configure"))
         .stdout(predicate::str::contains("--model <MODEL>"))
+        .stdout(predicate::str::contains("--debug"))
         .stdout(predicate::str::contains(
             "Run the guided client-selection and numbered-review workflow",
         ))

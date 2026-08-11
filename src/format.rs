@@ -86,21 +86,73 @@ fn removal_patch(recipe: &Recipe, existing: &[u8]) -> Result<Map<String, Value>>
     let root =
         parse_structured(recipe.format, existing)?.unwrap_or_else(|| Value::Object(Map::new()));
     for conditional in &recipe.conditional_removals {
-        let matches = root
-            .pointer(conditional.condition_pointer)
-            .and_then(Value::as_str)
-            .is_some_and(|value| {
-                if conditional.prefix {
-                    value.starts_with(conditional.expected)
-                } else {
-                    value == conditional.expected
-                }
-            });
-        if !matches {
+        if !conditional_removal_matches(&root, conditional) {
             remove_patch_pointer(&mut patch, conditional.removal_pointer);
         }
     }
     Ok(patch)
+}
+
+fn conditional_removal_matches(
+    root: &Value,
+    conditional: &crate::model::ConditionalRemoval,
+) -> bool {
+    conditional.alternatives.iter().any(|predicates| {
+        predicates.iter().all(|predicate| {
+            root.pointer(predicate.pointer)
+                .and_then(Value::as_str)
+                .is_some_and(|value| {
+                    if predicate.prefix {
+                        value.starts_with(&predicate.expected)
+                    } else {
+                        value == predicate.expected
+                    }
+                })
+        })
+    })
+}
+
+fn matching_merge_removals(recipe: &Recipe, existing: &[u8]) -> Result<Map<String, Value>> {
+    if recipe.conditional_removals.is_empty() {
+        return Ok(Map::new());
+    }
+    let root =
+        parse_structured(recipe.format, existing)?.unwrap_or_else(|| Value::Object(Map::new()));
+    let mut patch = Map::new();
+    for conditional in &recipe.conditional_removals {
+        if conditional_removal_matches(&root, conditional)
+            && root.pointer(conditional.removal_pointer)
+                != recipe.values.pointer(conditional.removal_pointer)
+        {
+            insert_patch_pointer(&mut patch, conditional.removal_pointer);
+        }
+    }
+    Ok(patch)
+}
+
+fn insert_patch_pointer(patch: &mut Map<String, Value>, pointer: &str) {
+    let segments = pointer
+        .strip_prefix('/')
+        .expect("conditional removal pointers are absolute")
+        .split('/')
+        .collect::<Vec<_>>();
+    insert_patch_path(patch, &segments);
+}
+
+fn insert_patch_path(patch: &mut Map<String, Value>, segments: &[&str]) {
+    let Some((key, remaining)) = segments.split_first() else {
+        return;
+    };
+    if remaining.is_empty() {
+        patch.insert((*key).to_owned(), Value::Null);
+        return;
+    }
+    let child = patch
+        .entry((*key).to_owned())
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .expect("conditional removal paths do not overlap scalar leaves");
+    insert_patch_path(child, remaining);
 }
 
 fn remove_patch_pointer(removals: &mut Map<String, Value>, pointer: &str) {
@@ -513,10 +565,13 @@ fn quote_dotenv(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 fn merge_json(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<u8>> {
-    let source = std::str::from_utf8(existing.unwrap_or(b"{}"))?;
+    let existing = existing.unwrap_or(b"{}");
+    let source = std::str::from_utf8(existing)?;
     let root = CstRootNode::parse(source, &ParseOptions::default())
         .context("parse JSON/JSONC/JSON5 configuration")?;
     let object = root.object_value_or_set();
+    let removals = matching_merge_removals(recipe, existing)?;
+    remove_cst_fields(&object, &removals)?;
     merge_cst_object(&object, recipe.values.as_object().expect("recipe object"));
     Ok(root.to_string().into_bytes())
 }

@@ -122,11 +122,13 @@ impl Client {
     }
 }
 
-/// AI SDK implementation used by an `OpenCode` provider entry.
+/// Provider protocol used by the `OpenCode` adapter.
 ///
-/// `OpenCode` loads the package named by `provider.<id>.npm`; the package must
-/// match the wire protocol exposed by the selected gateway/model family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// `OpenAI` and `Anthropic` can reuse `OpenCode`'s native providers for one-model configuration.
+/// Full discovered catalogs use Rewire-managed provider IDs so each protocol retains its own AI
+/// SDK package, including Google and OpenAI-compatible families.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum OpenCodeSdk {
     OpenAi,
     Anthropic,
@@ -169,10 +171,12 @@ impl OpenCodeSdk {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::OpenAi => "openai (@ai-sdk/openai)",
-            Self::Anthropic => "anthropic (@ai-sdk/anthropic)",
-            Self::Google => "google (@ai-sdk/google)",
-            Self::OpenAiCompatible => "openai-compatible (@ai-sdk/openai-compatible)",
+            Self::OpenAi => "openai (native provider; managed models)",
+            Self::Anthropic => "anthropic (native provider; managed models)",
+            Self::Google => "google (custom Rewire provider; @ai-sdk/google)",
+            Self::OpenAiCompatible => {
+                "openai-compatible (custom Rewire provider; @ai-sdk/openai-compatible)"
+            }
         }
     }
 
@@ -186,16 +190,31 @@ impl OpenCodeSdk {
         ]
     }
 
+    /// Return the native `OpenCode` provider whose model catalog is managed by `OpenCode`.
+    #[must_use]
+    pub const fn native_provider_id(self) -> Option<&'static str> {
+        match self {
+            Self::OpenAi => Some("openai"),
+            Self::Anthropic => Some("anthropic"),
+            Self::Google | Self::OpenAiCompatible => None,
+        }
+    }
+
     /// Infer a sensible package for common model families while keeping an explicit
     /// SDK override available for gateways that expose a nonstandard model ID.
     #[must_use]
     pub fn infer(model: Option<&str>) -> Self {
         let model = model.unwrap_or_default().to_ascii_lowercase();
+        let family_id = model.rsplit('/').next().unwrap_or(&model);
         if model.contains("claude") {
             Self::Anthropic
         } else if model.contains("gemini") {
             Self::Google
-        } else if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
+        } else if family_id.starts_with("gpt-")
+            || family_id.starts_with("o1")
+            || family_id.starts_with("o3")
+            || family_id.starts_with("codex-")
+        {
             Self::OpenAi
         } else {
             Self::OpenAiCompatible
@@ -267,8 +286,8 @@ pub struct Recipe {
     pub values: Value,
     /// Marks files that contain a credential and therefore require private permissions.
     pub sensitive: bool,
-    /// JSON pointer for the adapter-owned provider endpoint, when this recipe defines one.
-    pub(crate) provider_endpoint: Option<&'static str>,
+    /// JSON pointers for adapter-owned provider endpoints defined by this recipe.
+    pub(crate) provider_endpoints: Vec<&'static str>,
     /// JSON pointer for the client-native selected model written by this recipe.
     pub(crate) selected_model: Option<&'static str>,
     /// Selection fields removed only while they still refer to the Rewire provider.
@@ -285,7 +304,7 @@ impl std::fmt::Debug for Recipe {
             .field("format", &self.format)
             .field("values", &"[REDACTED]")
             .field("sensitive", &self.sensitive)
-            .field("provider_endpoint", &self.provider_endpoint)
+            .field("provider_endpoints", &self.provider_endpoints)
             .field("selected_model", &self.selected_model)
             .field("conditional_removals", &self.conditional_removals)
             .field("removal", &self.removal)
@@ -293,11 +312,17 @@ impl std::fmt::Debug for Recipe {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConditionalRemoval {
     pub(crate) removal_pointer: &'static str,
-    pub(crate) condition_pointer: &'static str,
-    pub(crate) expected: &'static str,
+    /// Disjunctive normal form: any group may match, and every predicate in that group must match.
+    pub(crate) alternatives: Vec<Vec<RemovalPredicate>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RemovalPredicate {
+    pub(crate) pointer: &'static str,
+    pub(crate) expected: String,
     pub(crate) prefix: bool,
 }
 
@@ -309,6 +334,8 @@ pub struct Plan {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sdk: Option<String>,
     pub clients: Vec<Client>,
@@ -430,6 +457,14 @@ pub struct Input {
     pub model: Option<String>,
     pub model_name: Option<String>,
     pub sdk: Option<OpenCodeSdk>,
+}
+
+/// One provider-native model entry written when the workflow adds the discovered catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub sdk: OpenCodeSdk,
 }
 #[derive(Clone)]
 pub struct Secret(String);

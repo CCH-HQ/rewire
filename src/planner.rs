@@ -1,8 +1,8 @@
-use crate::clients::CLIENTS;
+use crate::clients::{CLIENTS, ModelCatalogOptions};
 use crate::format::{merge_recipe, parse_structured};
 use crate::model::{
-    Action, Client, Conflict, FileSnapshot, Input, OpenCodeSdk, Plan, PlannedChange,
-    PreparedChange, Recipe,
+    Action, Client, Conflict, FileSnapshot, Input, ModelConfig, OpenCodeSdk, Plan, PlannedChange,
+    PreparedChange, Recipe, validate_model_id, validate_model_name,
 };
 use crate::security::{ensure_safe_path, hash_bytes, redact, validate_base_url};
 use anyhow::{Context, Result};
@@ -39,6 +39,16 @@ pub fn detect_clients(home: &Path) -> Vec<Client> {
 /// Returns an error when the base URL is invalid. Per-client filesystem and parse failures are
 /// retained as blocking conflicts so the caller can present the entire review in one pass.
 pub fn build_plan(home: &Path, input: &Input) -> Result<Plan> {
+    build_plan_with_catalog(home, input, &[])
+}
+
+/// Build a complete plan that also publishes a discovered model catalog.
+///
+/// # Errors
+///
+/// Returns an error when input validation fails. Per-client filesystem and parse failures are
+/// retained as blocking conflicts so the caller can present the entire review in one pass.
+pub fn build_plan_with_catalog(home: &Path, input: &Input, models: &[ModelConfig]) -> Result<Plan> {
     let base_url = validate_base_url(&input.base_url)?;
     Client::validate_model_configuration(
         &input.clients,
@@ -46,6 +56,7 @@ pub fn build_plan(home: &Path, input: &Input) -> Result<Plan> {
         input.model_name.as_deref(),
         input.sdk,
     )?;
+    validate_model_catalog(input.model.as_deref(), models)?;
     let model = input
         .clients
         .iter()
@@ -53,26 +64,43 @@ pub fn build_plan(home: &Path, input: &Input) -> Result<Plan> {
         .any(Client::requires_model)
         .then_some(input.model.as_deref())
         .flatten();
-    let sdk = input.clients.contains(&Client::OpenCode).then(|| {
-        input
-            .sdk
-            .unwrap_or_else(|| OpenCodeSdk::infer(model))
-            .npm()
-            .to_owned()
+    let opencode_sdk = input.clients.contains(&Client::OpenCode).then(|| {
+        models
+            .iter()
+            .find(|candidate| Some(candidate.id.as_str()) == model)
+            .map_or_else(
+                || input.sdk.unwrap_or_else(|| OpenCodeSdk::infer(model)),
+                |model| model.sdk,
+            )
     });
+    let sdk = opencode_sdk.map(|sdk| sdk.npm().to_owned());
+    let model_name = (input.clients.contains(&Client::OpenClaw)
+        || (input.clients.contains(&Client::OpenCode) && !models.is_empty())
+        || opencode_sdk.is_some_and(|sdk| sdk.native_provider_id().is_none()))
+    .then(|| input.model_name.clone())
+    .flatten();
     let mut changes = Vec::new();
     let mut conflicts = Vec::new();
     let mut warnings = Vec::new();
+    if input.model_name.is_some() && model_name.is_none() {
+        warnings.push(
+            "OpenCode's native provider manages model display names; --model-name was ignored"
+                .into(),
+        );
+    }
     let mut prepared = Vec::new();
     for &client in &input.clients {
         // Plan every candidate before writing anything, preventing partial application on parse errors.
-        for recipe in client.recipes_with_options(
+        for recipe in client.recipes_with_catalog(
             home,
             &base_url,
             input.token.expose(),
-            model,
-            input.model_name.as_deref(),
-            input.sdk,
+            ModelCatalogOptions {
+                selected: model,
+                display_name: model_name.as_deref(),
+                sdk: opencode_sdk,
+                models,
+            },
         ) {
             match plan_recipe(home, recipe, input.token.expose()) {
                 Ok(client_plan) => {
@@ -88,7 +116,8 @@ pub fn build_plan(home: &Path, input: &Input) -> Result<Plan> {
     Ok(Plan {
         base_url,
         model: model.map(ToOwned::to_owned),
-        model_name: input.model_name.clone(),
+        model_name,
+        models: models.to_vec(),
         sdk,
         clients: input.clients.clone(),
         changes,
@@ -123,6 +152,7 @@ pub fn build_remove_plan(home: &Path, clients: &[Client]) -> Result<Plan> {
         base_url: String::new(),
         model: None,
         model_name: None,
+        models: Vec::new(),
         sdk: None,
         clients: clients.to_vec(),
         changes,
@@ -130,6 +160,23 @@ pub fn build_remove_plan(home: &Path, clients: &[Client]) -> Result<Plan> {
         warnings: Vec::new(),
         prepared,
     })
+}
+
+fn validate_model_catalog(primary: Option<&str>, models: &[ModelConfig]) -> Result<()> {
+    let mut ids = std::collections::BTreeSet::new();
+    for model in models {
+        validate_model_id(&model.id)?;
+        if let Some(display_name) = model.display_name.as_deref() {
+            validate_model_name(display_name)?;
+        }
+        if !ids.insert(model.id.as_str()) {
+            anyhow::bail!("model catalog contains duplicate ID `{}`", model.id);
+        }
+    }
+    if !models.is_empty() && primary.is_none_or(|primary| !ids.contains(primary)) {
+        anyhow::bail!("the default model must be present in the configured model catalog");
+    }
+    Ok(())
 }
 
 fn plan_recipe(
@@ -197,9 +244,10 @@ fn recipe_conflicts(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<Conf
         return Ok(Vec::new());
     };
     let mut conflicts = Vec::new();
-    if let Some(pointer) = recipe.provider_endpoint
-        && let Some(current) = root.pointer(pointer)
-    {
+    for &pointer in &recipe.provider_endpoints {
+        let Some(current) = root.pointer(pointer) else {
+            continue;
+        };
         let requested = recipe
             .values
             .pointer(pointer)
@@ -210,9 +258,12 @@ fn recipe_conflicts(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<Conf
             .and_then(|value| validate_base_url(value).ok())
             .is_some_and(|value| value == requested);
         if !same_endpoint {
+            let provider = pointer.split('/').nth(2).unwrap_or("configured");
             conflicts.push(review_conflict(
                 recipe,
-                "provider `rewire` already uses a different base URL; applying will replace it",
+                format!(
+                    "provider `{provider}` already uses a different base URL; applying will replace it"
+                ),
             ));
         }
     }
@@ -228,7 +279,7 @@ fn recipe_conflicts(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<Conf
     Ok(conflicts)
 }
 
-fn review_conflict(recipe: &Recipe, reason: &'static str) -> Conflict {
+fn review_conflict(recipe: &Recipe, reason: impl Into<String>) -> Conflict {
     Conflict {
         client: recipe.client,
         path: recipe.path.clone(),

@@ -1,6 +1,6 @@
 use crate::{
-    Action, Client, Input, ModelPreset, OpenCodeSdk, Plan, apply_plan, build_plan, detect_clients,
-    popular_models, validate_base_url, validate_model_name,
+    Action, Client, Input, ModelConfig, OpenCodeSdk, Plan, apply_plan, build_plan_with_catalog,
+    detect_clients, validate_base_url, validate_model_name,
 };
 use anstyle::{AnsiColor, Style};
 use anyhow::Result;
@@ -8,6 +8,10 @@ use inquire::{
     InquireError, MultiSelect, Password, PasswordDisplayMode, Select, Text, ui::RenderConfig,
 };
 use std::path::Path;
+
+mod model_picker;
+
+use model_picker::{SelectedModel, prompt_model};
 
 const CLIENTS: [Client; 5] = [
     Client::Claude,
@@ -22,10 +26,8 @@ const CLIENT_PROMPT: &str = "Choose one or more clients";
 const BASE_URL_PROMPT: &str = "Compatible API base URL";
 const TOKEN_PROMPT: &str = "API token";
 const TOKEN_DISPLAY_MODE: PasswordDisplayMode = PasswordDisplayMode::Masked;
-const MODEL_PROMPT: &str = "Choose a model";
-const CUSTOM_MODEL_PROMPT: &str = "Custom model ID";
 const MODEL_NAME_PROMPT: &str = "Model display name (optional; Enter keeps the suggested name)";
-const SDK_PROMPT: &str = "OpenCode AI SDK";
+const SDK_PROMPT: &str = "OpenCode provider protocol";
 const REVIEW_PROMPT: &str = "Confirm the numbered plan";
 const BLOCKED_PROMPT: &str = "Resolve blocking items before applying";
 const ACCENT: Style = AnsiColor::Cyan.on_default().bold();
@@ -49,32 +51,16 @@ enum ModelNameChoice {
     Value(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelChoice {
-    Preset(ModelPreset),
-    Custom,
+enum ModelPromptOutcome {
+    Skipped,
+    Cancelled,
+    Selected(SelectedModel),
 }
 
-impl std::fmt::Display for ModelChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Preset(preset) => {
-                write!(
-                    f,
-                    "{} [{}] ({})",
-                    preset.display_name, preset.provider, preset.id
-                )
-            }
-            Self::Custom => f.write_str(CUSTOM_MODEL_PROMPT),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SelectedModel {
-    id: String,
-    display_name: Option<String>,
-    sdk: OpenCodeSdk,
+#[derive(Debug, Clone)]
+struct WorkflowInput {
+    input: Input,
+    models: Vec<ModelConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -171,19 +157,28 @@ impl Palette {
 ///
 /// Returns an error when prompting, planning, applying, or verification fails.
 pub fn run(home: &Path, color: bool) -> Result<()> {
+    run_with_debug(home, color, false)
+}
+
+/// Run the guided workflow with optional credential-free model discovery diagnostics.
+///
+/// # Errors
+///
+/// Returns an error when prompting, planning, applying, or verification fails.
+pub fn run_with_debug(home: &Path, color: bool, debug: bool) -> Result<()> {
     let palette = Palette::new(color);
     let render_config = render_config(palette.enabled);
     eprintln!("{}", palette.accent(WORKFLOW_TITLE));
     eprintln!("{}", palette.muted(WORKFLOW_HELP));
 
     'configure: loop {
-        let Some(input) = collect_input(&render_config, palette, home)? else {
+        let Some(input) = collect_input(&render_config, palette, home, debug)? else {
             eprintln!("{}", palette.warning("Cancelled. No files were changed."));
             return Ok(());
         };
 
         loop {
-            let plan = build_plan(home, &input)?;
+            let plan = build_plan_with_catalog(home, &input.input, &input.models)?;
             let summary = review_summary(&plan);
             print_numbered_plan(&plan, summary, palette);
 
@@ -258,15 +253,11 @@ fn collect_input(
     render_config: &RenderConfig<'static>,
     palette: Palette,
     home: &Path,
-) -> Result<Option<Input>> {
+    debug: bool,
+) -> Result<Option<WorkflowInput>> {
     let detected = detect_clients(home);
     let labels = client_labels(&detected);
-    let defaults = CLIENTS
-        .iter()
-        .enumerate()
-        .filter(|(_, client)| detected.contains(client))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
+    let defaults = default_client_indexes(&detected);
 
     let selected = loop {
         let result = MultiSelect::new(CLIENT_PROMPT, labels.clone())
@@ -283,62 +274,55 @@ fn collect_input(
         eprintln!("{}", palette.danger("Select at least one client."));
     };
 
-    let base_url = loop {
-        let result = Text::new(BASE_URL_PROMPT)
-            .with_placeholder("https://api.example.com")
-            .with_render_config(*render_config)
-            .prompt();
-        let Some(value) = optional_prompt(result)? else {
-            return Ok(None);
-        };
-        match validate_base_url(&value) {
-            Ok(_) => break value,
-            Err(error) => eprintln!("{}", palette.danger(format!("Invalid base URL: {error}"))),
-        }
+    let Some(base_url) = prompt_base_url(render_config, palette)? else {
+        return Ok(None);
     };
-
-    let token = loop {
-        let result = Password::new(TOKEN_PROMPT)
-            .without_confirmation()
-            .with_display_mode(TOKEN_DISPLAY_MODE)
-            .with_render_config(*render_config)
-            .prompt();
-        let Some(value) = optional_prompt(result)? else {
-            return Ok(None);
-        };
-        match crate::Secret::new(value) {
-            Ok(secret) => break secret,
-            Err(error) => eprintln!("{}", palette.danger(format!("Invalid token: {error}"))),
-        }
+    let Some(token) = prompt_token(render_config, palette)? else {
+        return Ok(None);
     };
 
     let clients = selected
         .into_iter()
         .map(|option| CLIENTS[option.index])
         .collect::<Vec<_>>();
-    let selected_model = if clients.iter().copied().any(Client::requires_model) {
-        let Some(model) = prompt_model(render_config, palette)? else {
-            return Ok(None);
-        };
-        Some(model)
-    } else {
-        None
+    let selected_model = match prompt_model_for_clients(
+        &clients,
+        &base_url,
+        token.expose(),
+        render_config,
+        palette,
+        debug,
+    )? {
+        ModelPromptOutcome::Skipped => None,
+        ModelPromptOutcome::Cancelled => return Ok(None),
+        ModelPromptOutcome::Selected(model) => Some(model),
     };
+    let adding_all_models = selected_model
+        .as_ref()
+        .is_some_and(|model| !model.models.is_empty());
     let sdk = if clients.contains(&Client::OpenCode) {
-        let Some(sdk) = prompt_sdk(
-            selected_model.as_ref().map(|model| model.sdk),
-            render_config,
-        )?
-        else {
-            return Ok(None);
-        };
-        Some(sdk)
+        if adding_all_models {
+            selected_model.as_ref().map(|model| model.sdk)
+        } else {
+            let Some(sdk) = prompt_sdk(
+                selected_model.as_ref().map(|model| model.sdk),
+                render_config,
+            )?
+            else {
+                return Ok(None);
+            };
+            Some(sdk)
+        }
     } else {
         None
     };
-    let model_name = if clients
-        .iter()
-        .any(|client| matches!(client, Client::OpenCode | Client::OpenClaw))
+    let model_name = if adding_all_models {
+        selected_model
+            .as_ref()
+            .and_then(|model| model.display_name.clone())
+    } else if clients.contains(&Client::OpenClaw)
+        || (clients.contains(&Client::OpenCode)
+            && sdk.is_some_and(|sdk| sdk.native_provider_id().is_none()))
     {
         match prompt_model_name(
             selected_model
@@ -354,16 +338,81 @@ fn collect_input(
     } else {
         None
     };
+    let models = selected_model
+        .as_ref()
+        .map(|model| model.models.clone())
+        .unwrap_or_default();
     let model = selected_model.map(|model| model.id);
 
-    Ok(Some(Input {
-        base_url,
-        token,
-        clients,
-        model,
-        model_name,
-        sdk,
+    Ok(Some(WorkflowInput {
+        input: Input {
+            base_url,
+            token,
+            clients,
+            model,
+            model_name,
+            sdk,
+        },
+        models,
     }))
+}
+
+fn prompt_model_for_clients(
+    clients: &[Client],
+    base_url: &str,
+    token: &str,
+    render_config: &RenderConfig<'static>,
+    palette: Palette,
+    debug: bool,
+) -> Result<ModelPromptOutcome> {
+    if !clients.iter().copied().any(Client::requires_model) {
+        return Ok(ModelPromptOutcome::Skipped);
+    }
+    Ok(
+        match prompt_model(clients, base_url, token, render_config, palette, debug)? {
+            Some(model) => ModelPromptOutcome::Selected(model),
+            None => ModelPromptOutcome::Cancelled,
+        },
+    )
+}
+
+fn prompt_base_url(
+    render_config: &RenderConfig<'static>,
+    palette: Palette,
+) -> Result<Option<String>> {
+    loop {
+        let result = Text::new(BASE_URL_PROMPT)
+            .with_placeholder("https://api.example.com")
+            .with_render_config(*render_config)
+            .prompt();
+        let Some(value) = optional_prompt(result)? else {
+            return Ok(None);
+        };
+        match validate_base_url(&value) {
+            Ok(_) => return Ok(Some(value)),
+            Err(error) => eprintln!("{}", palette.danger(format!("Invalid base URL: {error}"))),
+        }
+    }
+}
+
+fn prompt_token(
+    render_config: &RenderConfig<'static>,
+    palette: Palette,
+) -> Result<Option<crate::Secret>> {
+    loop {
+        let result = Password::new(TOKEN_PROMPT)
+            .without_confirmation()
+            .with_display_mode(TOKEN_DISPLAY_MODE)
+            .with_render_config(*render_config)
+            .prompt();
+        let Some(value) = optional_prompt(result)? else {
+            return Ok(None);
+        };
+        match crate::Secret::new(value) {
+            Ok(secret) => return Ok(Some(secret)),
+            Err(error) => eprintln!("{}", palette.danger(format!("Invalid token: {error}"))),
+        }
+    }
 }
 
 fn prompt_sdk(
@@ -383,57 +432,6 @@ fn prompt_sdk(
             .with_render_config(*render_config)
             .prompt(),
     )
-}
-
-fn prompt_model(
-    render_config: &RenderConfig<'static>,
-    palette: Palette,
-) -> Result<Option<SelectedModel>> {
-    let mut choices = popular_models()
-        .iter()
-        .copied()
-        .map(ModelChoice::Preset)
-        .collect::<Vec<_>>();
-    choices.push(ModelChoice::Custom);
-    let Some(choice) = optional_prompt(
-        Select::new(MODEL_PROMPT, choices)
-            .with_starting_cursor(0)
-            .with_page_size(10)
-            .with_render_config(*render_config)
-            .prompt(),
-    )?
-    else {
-        return Ok(None);
-    };
-    match choice {
-        ModelChoice::Preset(preset) => Ok(Some(SelectedModel {
-            id: preset.id.to_owned(),
-            display_name: Some(preset.display_name.to_owned()),
-            sdk: preset.sdk,
-        })),
-        ModelChoice::Custom => loop {
-            let result = Text::new(CUSTOM_MODEL_PROMPT)
-                .with_placeholder("e.g. gpt-5.5")
-                .with_render_config(*render_config)
-                .prompt();
-            let Some(value) = optional_prompt(result)? else {
-                return Ok(None);
-            };
-            let value = value.trim().to_owned();
-            match crate::validate_model_id(&value) {
-                Ok(()) => {
-                    return Ok(Some(SelectedModel {
-                        sdk: OpenCodeSdk::infer(Some(&value)),
-                        id: value,
-                        display_name: None,
-                    }));
-                }
-                Err(error) => {
-                    eprintln!("{}", palette.danger(format!("Invalid model ID: {error}")));
-                }
-            }
-        },
-    }
 }
 
 fn prompt_model_name(
@@ -481,6 +479,14 @@ fn client_labels(detected: &[Client]) -> Vec<String> {
                 client.to_string()
             }
         })
+        .collect()
+}
+
+fn default_client_indexes(detected: &[Client]) -> Vec<usize> {
+    CLIENTS
+        .iter()
+        .enumerate()
+        .filter_map(|(index, client)| detected.contains(client).then_some(index))
         .collect()
 }
 
@@ -547,6 +553,14 @@ fn numbered_plan_items(plan: &Plan) -> Vec<NumberedPlanItem> {
 fn print_numbered_plan(plan: &Plan, summary: ReviewSummary, palette: Palette) {
     eprintln!();
     eprintln!("{}", palette.accent("Planned modifications"));
+    if !plan.models.is_empty() {
+        eprintln!(
+            "{} {} model(s); default {}",
+            palette.muted("Catalog:"),
+            palette.success(plan.models.len()),
+            palette.accent(plan.model.as_deref().unwrap_or("unset"))
+        );
+    }
     let items = numbered_plan_items(plan);
     if items.is_empty() {
         eprintln!("{}", palette.success("No files need modification."));

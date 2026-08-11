@@ -193,22 +193,53 @@ fn codex_and_opencode_recipes_follow_current_official_provider_shapes() {
 }
 
 #[test]
-fn opencode_separates_model_id_display_name_and_sdk_package() {
+fn opencode_uses_native_catalogs_for_openai_and_anthropic_only() {
     let home = std::path::Path::new("/fixture-home");
-    let recipes = Client::OpenCode.recipes_with_options(
+    for (sdk, model, provider) in [
+        (OpenCodeSdk::OpenAi, "gpt-5.5", "openai"),
+        (OpenCodeSdk::Anthropic, "claude-sonnet-5", "anthropic"),
+    ] {
+        let recipes = Client::OpenCode.recipes_with_options(
+            home,
+            "https://gateway.example/v1",
+            "TOKEN",
+            Some(model),
+            Some("ignored display name"),
+            Some(sdk),
+        );
+        let config = &recipes[0].values;
+        assert_eq!(config["model"], format!("{provider}/{model}"));
+        assert_eq!(
+            config["provider"][provider]["options"]["baseURL"],
+            "https://gateway.example/v1"
+        );
+        assert_eq!(
+            config["provider"][provider]["options"]["apiKey"],
+            "{file:/fixture-home/.config/rewire/secrets/opencode-token}"
+        );
+        assert!(config["provider"][provider].get("npm").is_none());
+        assert!(config["provider"][provider].get("name").is_none());
+        assert!(config["provider"][provider].get("models").is_none());
+        assert!(config["provider"].get("rewire").is_none());
+    }
+
+    let compatible = Client::OpenCode.recipes_with_options(
         home,
         "https://gateway.example/v1",
         "TOKEN",
-        Some("gpt-5.5"),
-        Some("GPT-5.5"),
-        Some(OpenCodeSdk::OpenAi),
+        Some("custom-model"),
+        Some("Custom model"),
+        Some(OpenCodeSdk::OpenAiCompatible),
     );
-    let config = &recipes[0].values;
-    assert_eq!(config["model"], "rewire/gpt-5.5");
-    assert_eq!(config["provider"]["rewire"]["npm"], "@ai-sdk/openai");
+    let config = &compatible[0].values;
+    assert_eq!(config["model"], "rewire/custom-model");
     assert_eq!(
-        config["provider"]["rewire"]["models"]["gpt-5.5"]["name"],
-        "GPT-5.5"
+        config["provider"]["rewire"]["npm"],
+        "@ai-sdk/openai-compatible"
+    );
+    assert_eq!(
+        config["provider"]["rewire"]["models"]["custom-model"]["name"],
+        "Custom model"
     );
     assert_eq!(
         OpenCodeSdk::parse("@ai-sdk/anthropic").unwrap(),
@@ -226,6 +257,64 @@ fn opencode_separates_model_id_display_name_and_sdk_package() {
         OpenCodeSdk::infer(Some("custom-model")).npm(),
         "@ai-sdk/openai-compatible"
     );
+}
+
+#[test]
+fn opencode_native_provider_removal_is_credential_scoped() {
+    let dir = tempdir().unwrap();
+    let input = Input {
+        base_url: "https://gateway.example/v1".into(),
+        token: Secret::new("native-secret").unwrap(),
+        clients: vec![Client::OpenCode],
+        model: Some("gpt-5.5".into()),
+        model_name: None,
+        sdk: Some(OpenCodeSdk::OpenAi),
+    };
+    apply_plan(dir.path(), &build_plan(dir.path(), &input).unwrap()).unwrap();
+
+    let path = dir.path().join(".config/opencode/opencode.jsonc");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["provider"]["openai"]["options"]["timeout"] = serde_json::json!(30_000);
+    fs::write(&path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+
+    let plan = build_remove_plan(dir.path(), &[Client::OpenCode]).unwrap();
+    assert!(plan.conflicts.is_empty());
+    apply_plan(dir.path(), &plan).unwrap();
+
+    let config: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert!(config.get("model").is_none());
+    assert_eq!(config["provider"]["openai"]["options"]["timeout"], 30_000);
+    assert!(config.pointer("/provider/openai/options/baseURL").is_none());
+    assert!(config.pointer("/provider/openai/options/apiKey").is_none());
+}
+
+#[test]
+fn opencode_remove_preserves_operator_owned_native_provider() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".config/opencode/opencode.jsonc");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = serde_json::json!({
+        "model": "openai/gpt-5.5",
+        "provider": {
+            "openai": {
+                "options": {
+                    "baseURL": "https://operator.example/v1",
+                    "apiKey": "{env:OPENAI_API_KEY}"
+                }
+            }
+        }
+    });
+    fs::write(&path, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
+
+    let plan = build_remove_plan(dir.path(), &[Client::OpenCode]).unwrap();
+    assert!(
+        plan.changes
+            .iter()
+            .all(|change| matches!(change.action, Action::Noop))
+    );
+    apply_plan(dir.path(), &plan).unwrap();
+    let current: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(current, original);
 }
 
 #[test]
@@ -284,6 +373,239 @@ fn hermes_and_openclaw_recipes_follow_current_official_provider_shapes() {
         home.join(".openclaw/secrets/rewire-token")
     );
     assert!(openclaw.pointer("/providers/rewire").is_none());
+}
+
+#[test]
+fn discovered_catalog_is_written_for_opencode_hermes_and_openclaw() {
+    let dir = tempdir().unwrap();
+    let models = vec![
+        ModelConfig {
+            id: "gpt-5.5".into(),
+            display_name: Some("GPT-5.5".into()),
+            sdk: OpenCodeSdk::OpenAi,
+        },
+        ModelConfig {
+            id: "claude-sonnet-5".into(),
+            display_name: Some("Claude Sonnet 5".into()),
+            sdk: OpenCodeSdk::Anthropic,
+        },
+        ModelConfig {
+            id: "gemini-3-pro".into(),
+            display_name: Some("Gemini 3 Pro".into()),
+            sdk: OpenCodeSdk::Google,
+        },
+        ModelConfig {
+            id: "custom-model".into(),
+            display_name: None,
+            sdk: OpenCodeSdk::OpenAiCompatible,
+        },
+    ];
+    let input = Input {
+        base_url: "https://gateway.example/v1".into(),
+        token: Secret::new("catalog-secret").unwrap(),
+        clients: vec![Client::OpenCode, Client::Hermes, Client::OpenClaw],
+        model: Some("claude-sonnet-5".into()),
+        model_name: Some("Claude Sonnet 5".into()),
+        sdk: Some(OpenCodeSdk::Anthropic),
+    };
+    let plan = build_plan_with_catalog(dir.path(), &input, &models).unwrap();
+    assert_eq!(plan.models, models);
+    assert_eq!(plan.sdk.as_deref(), Some("@ai-sdk/anthropic"));
+    apply_plan(dir.path(), &plan).unwrap();
+
+    let opencode: Value = serde_json::from_slice(
+        &fs::read(dir.path().join(".config/opencode/opencode.jsonc")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(opencode["model"], "rewire-anthropic/claude-sonnet-5");
+    assert!(opencode["provider"].get("rewire").is_none());
+    assert_eq!(
+        opencode["provider"]["rewire-oairesp"]["npm"],
+        "@ai-sdk/openai"
+    );
+    assert_eq!(
+        opencode["provider"]["rewire-anthropic"]["npm"],
+        "@ai-sdk/anthropic"
+    );
+    assert_eq!(
+        opencode["provider"]["rewire-google"]["npm"],
+        "@ai-sdk/google"
+    );
+    assert_eq!(
+        opencode["provider"]["rewire-oaicomp"]["npm"],
+        "@ai-sdk/openai-compatible"
+    );
+    for provider in [
+        "rewire-oairesp",
+        "rewire-anthropic",
+        "rewire-google",
+        "rewire-oaicomp",
+    ] {
+        assert_eq!(
+            opencode["provider"][provider]["models"]
+                .as_object()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    let hermes: Value =
+        serde_yaml::from_slice(&fs::read(dir.path().join(".hermes/config.yaml")).unwrap()).unwrap();
+    assert_eq!(hermes["model"]["name"], "claude-sonnet-5");
+    assert_eq!(
+        hermes["providers"]["rewire"]["models"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+
+    let openclaw: Value =
+        serde_json::from_slice(&fs::read(dir.path().join(".openclaw/openclaw.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        openclaw["agents"]["defaults"]["model"]["primary"],
+        "rewire/claude-sonnet-5"
+    );
+    assert_eq!(
+        openclaw["models"]["providers"]["rewire"]["models"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[test]
+fn opencode_catalog_migrates_and_reconciles_rewire_managed_provider_groups() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join(".config/opencode/opencode.jsonc");
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    let token_reference = format!(
+        "{{file:{}}}",
+        dir.path()
+            .join(".config/rewire/secrets/opencode-token")
+            .to_string_lossy()
+    );
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "model": "rewire/claude-sonnet-5",
+            "theme": "operator-theme",
+            "provider": {
+                "rewire": {
+                    "name": "Rewire",
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": {
+                        "baseURL": "https://gateway.example/v1",
+                        "apiKey": token_reference,
+                    },
+                    "models": {
+                        "gpt-5.5": {"name": "GPT-5.5"},
+                        "claude-sonnet-5": {"name": "Claude Sonnet 5"},
+                    },
+                },
+                "operator": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": {"baseURL": "https://operator.example/v1"},
+                    "models": {"keep-model": {"name": "Keep Model"}},
+                },
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let input = Input {
+        base_url: "https://gateway.example/v1".into(),
+        token: Secret::new("catalog-secret").unwrap(),
+        clients: vec![Client::OpenCode],
+        model: Some("claude-sonnet-5".into()),
+        model_name: Some("Claude Sonnet 5".into()),
+        sdk: Some(OpenCodeSdk::Anthropic),
+    };
+    let full_catalog = vec![
+        ModelConfig {
+            id: "gpt-5.5".into(),
+            display_name: Some("GPT-5.5".into()),
+            sdk: OpenCodeSdk::OpenAi,
+        },
+        ModelConfig {
+            id: "claude-sonnet-5".into(),
+            display_name: Some("Claude Sonnet 5".into()),
+            sdk: OpenCodeSdk::Anthropic,
+        },
+    ];
+    apply_plan(
+        dir.path(),
+        &build_plan_with_catalog(dir.path(), &input, &full_catalog).unwrap(),
+    )
+    .unwrap();
+
+    let migrated: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    assert_eq!(migrated["theme"], "operator-theme");
+    assert!(migrated["provider"].get("rewire").is_none());
+    assert!(migrated["provider"].get("operator").is_some());
+    assert!(migrated["provider"].get("rewire-oairesp").is_some());
+    assert!(migrated["provider"].get("rewire-anthropic").is_some());
+    assert_eq!(migrated["model"], "rewire-anthropic/claude-sonnet-5");
+
+    let mut migrated = migrated;
+    migrated["provider"]["rewire-anthropic"]["options"]["timeout"] = serde_json::json!(30_000);
+    fs::write(&config_path, serde_json::to_vec_pretty(&migrated).unwrap()).unwrap();
+
+    let anthropic_only = vec![full_catalog[1].clone()];
+    apply_plan(
+        dir.path(),
+        &build_plan_with_catalog(dir.path(), &input, &anthropic_only).unwrap(),
+    )
+    .unwrap();
+    let reconciled: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    assert!(reconciled["provider"].get("rewire-oairesp").is_none());
+    assert_eq!(
+        reconciled["provider"]["rewire-anthropic"]["models"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        reconciled["provider"]["rewire-anthropic"]["options"]["timeout"],
+        30_000
+    );
+    assert!(reconciled["provider"].get("operator").is_some());
+}
+
+#[test]
+fn discovered_catalog_requires_unique_ids_and_an_included_default() {
+    let dir = tempdir().unwrap();
+    let input = Input {
+        base_url: "https://gateway.example/v1".into(),
+        token: Secret::new("catalog-secret").unwrap(),
+        clients: vec![Client::OpenCode],
+        model: Some("default-model".into()),
+        model_name: None,
+        sdk: None,
+    };
+    let duplicate = vec![
+        ModelConfig {
+            id: "default-model".into(),
+            display_name: None,
+            sdk: OpenCodeSdk::OpenAiCompatible,
+        },
+        ModelConfig {
+            id: "default-model".into(),
+            display_name: None,
+            sdk: OpenCodeSdk::OpenAiCompatible,
+        },
+    ];
+    assert!(build_plan_with_catalog(dir.path(), &input, &duplicate).is_err());
+    let missing_default = vec![ModelConfig {
+        id: "other-model".into(),
+        display_name: None,
+        sdk: OpenCodeSdk::OpenAiCompatible,
+    }];
+    assert!(build_plan_with_catalog(dir.path(), &input, &missing_default).is_err());
 }
 
 #[test]

@@ -3,7 +3,7 @@ use crate::model::OpenCodeSdk;
 /// A curated model preset used by the guided workflow.
 ///
 /// The catalog stores provider-native IDs. Adapters add client-specific qualification, such as
-/// `OpenCode`'s `rewire/<id>` selection, at the configuration boundary.
+/// `OpenCode`'s native or Rewire-managed qualified selection at the configuration boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelPreset {
     pub id: &'static str,

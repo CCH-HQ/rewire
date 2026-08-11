@@ -33,24 +33,45 @@ rewire configure --no-color
 
 `--token` is convenient but can be visible in shell history and process listings. Prefer `--token-stdin`, `REWIRE_TOKEN`, or the guided workflow (`rewire configure`). Complete tokens are excluded from plans, manifests, diagnostics, and the custom `Secret` debug representation.
 
-`--model` is required when OpenCode, Hermes, or OpenClaw is selected. It is the provider-native model ID, not a display label or a qualified client reference. `--model-name` optionally supplies the OpenCode/OpenClaw catalog label; otherwise the ID is shown. `--sdk` selects the OpenCode AI SDK package (`openai`, `anthropic`, `google`, or `openai-compatible`). When omitted, common `gpt-*`, `o1*`, `o3*`, `claude-*`, and `gemini-*` IDs are inferred and unknown IDs use the compatible package. Rewire writes each client's required shape: OpenCode uses `model: "rewire/<id>"` plus `provider.rewire.models.<id>.name`, Hermes uses `model: { provider: rewire, name: <id> }`, and OpenClaw uses `agents.defaults.model.primary: "rewire/<id>"`. Claude and Codex retain their current model selection; a model supplied for a mixed client set is used only by the clients that require it. See [client compatibility](docs/client-compatibility.md) for credential locations, source evidence, and known upstream documentation drift.
+`--model` is required when OpenCode, Hermes, or OpenClaw is selected. It is the provider-native model ID, not a display label or a qualified client reference. `--sdk` selects the OpenCode provider protocol (`openai`, `anthropic`, `google`, or `openai-compatible`); common GPT, Claude, and Gemini IDs are inferred when it is omitted. A single OpenCode model reuses the native `openai` or `anthropic` provider where applicable; Google and compatible single-model selections use the isolated `rewire` provider. `--model-name` applies only to a custom OpenCode entry or to OpenClaw; a value supplied for an OpenCode native provider is reported and ignored. Hermes uses `model: { provider: rewire, name: <id> }`, while OpenClaw uses `agents.defaults.model.primary: "rewire/<id>"`. Claude and Codex retain their current model selection. See [client compatibility](docs/client-compatibility.md) for credential locations, source evidence, and known upstream documentation drift.
 
 Running `rewire` without arguments opens the workflow only when both standard input and standard output are terminals. Pipes and automation fail fast with the missing CLI input instead of waiting for prompts; `--non-interactive` makes that intent explicit. The previous `rewire tui` spelling remains an alias for `rewire configure`.
 
 Doctor, plan, apply, remove, rollback, and backup commands render concise operator-facing text by default. Doctor reports all supported clients, selected config paths, local executable versions, and relevant environment variable names while hiding their values. Plans use numbered semantic markers for created, updated, deleted, unchanged, review-required, and blocked targets; headings and identifiers are cyan, successful states are green, warnings are yellow, and failures are red. `rollback` accepts an optional transaction ID: on a terminal it asks whether to restore the latest committed, still-available transaction; `--yes` selects that latest transaction without prompting, while JSON and non-interactive invocations require either an explicit ID or `--yes`. A successfully rolled-back transaction is removed from the default latest-transaction candidate list. `--json` switches successful results and runtime errors to stable machine-readable JSON. Color is emitted only to a terminal; `--no-color` and `NO_COLOR` also apply to Clap's early help and validation output.
 
-An existing `rewire` provider at the same normalized URL is idempotent. A different URL remains a prepared modification but is also numbered `[REVIEW]`; the guided workflow's final selection or an explicit `--yes` accepts that replacement. Syntax errors, read-only files, symlinks, paths outside the selected Home, and concurrent edits remain blocking. `remove --client ...` uses the same review and transaction path, removes only adapter-owned fields, and deletes only dedicated secret files.
+An existing adapter target at the same normalized URL is idempotent. A different URL remains a prepared modification but is also numbered `[REVIEW]`; the guided workflow's final selection or an explicit `--yes` accepts that replacement. Syntax errors, read-only files, symlinks, paths outside the selected Home, and concurrent edits remain blocking. `remove --client ...` uses the same review and transaction path, removes only adapter-owned fields, and deletes only dedicated secret files.
 
 The workflow first presents a multi-select list for one or more detected clients, then asks for the compatible base URL and an ASCII-masked token. A required model-ID prompt appears only when OpenCode, Hermes, or OpenClaw is selected; Claude/Codex-only workflows skip it. The `*` mask advances with the cursor so secret input has visible progress without exposing token characters. It generates a numbered list of file modifications and conflicts before presenting a single final choice: apply the numbered plan, return to edit the inputs, or cancel. Existing provider URLs or selected models that would be replaced appear as numbered review items. Malformed, read-only, and symlinked targets are blocking items; while any are present, the apply choice is omitted. If a file changes after review, the workflow offers to rebuild the plan, edit the inputs, or stop. Success is green, cancellation and warnings are yellow, errors and blocking items are red, and plan headings and identifiers are cyan. The prompt layer uses Inquire with ASCII control labels and markers so legacy Windows code pages do not have to render decorative Unicode glyphs; `--no-color` and `NO_COLOR` preserve the same text without color sequences.
 
-The OpenCode workflow also asks for the SDK package and an optional catalog display name after the model ID. The SDK selector starts on the package inferred from that ID while still requiring an explicit single-choice confirmation. This keeps the provider-native model ID, the user-facing label, and the runtime SDK package as separate values.
+The OpenCode workflow asks for the provider protocol after the model ID and starts on the protocol inferred from that ID. OpenAI and Anthropic selections use their native OpenCode providers and skip the redundant display-name prompt because OpenCode manages those catalogs. The optional display-name prompt remains for custom OpenCode providers and OpenClaw.
 
-The guided workflow includes a local catalog of popular text and coding models from the reviewed
-local model snapshot, provider documentation, and a capability shortlist cross-checked against
-Artificial Analysis. It covers GPT, Claude, Gemini, DeepSeek, Qwen, GLM, Kimi, MiniMax, Grok,
-Mistral, MiMo, Nemotron, Doubao, and Cohere families. Select `Custom model ID` for a model released
-after the catalog snapshot. See [model catalog](docs/model-catalog.md) for the source version,
-refresh time, selection boundary, and current entries.
+Before `Choose a model`, the guided workflow probes protocol-standard Models endpoints in parallel:
+root URLs use `/v1/models` for OpenAI and Anthropic and `/v1beta/models` for Google, while an
+explicit path prefix is preserved and receives one `/models` segment. A short ASCII spinner remains
+compatible with legacy Windows code pages; each successful remote result is shown first with a
+green `AVAILABLE` marker. Transient transport/read failures, timeouts, HTTP 429, and HTTP 5xx are
+retried per API up to three total attempts with short exponential backoff; authentication, routing,
+redirect, response-limit, and schema failures are reported immediately. A failed protocol is a
+warning rather than a workflow stop, and `--debug` includes its final attempt count. The first
+picker view stays compact with `Add all N available models`, discovered models, `Show all catalog
+models`, and `Custom model ID`. Choosing `Add all` publishes every successfully discovered model
+to OpenCode, OpenClaw, and Hermes, then opens a second picker for the primary/default model; the
+catalog and default are reviewed together before one confirmation. Choosing a single discovered or
+catalog model keeps the existing one-model path. The reviewed local catalog is expanded only after
+the explicit `Show all` choice, and duplicate IDs remain listed once. For OpenCode, Add all groups
+the catalog by protocol under `rewire-oairesp`, `rewire-anthropic`, `rewire-google`, and
+`rewire-oaicomp`; the selected default uses the matching `<provider>/<model>` reference, so Claude
+does not accidentally run through `@ai-sdk/openai-compatible`. The local catalog covers GPT, Claude, Gemini, DeepSeek, Qwen, GLM, Kimi,
+MiniMax, Grok, Mistral, MiMo, Nemotron, Doubao, and Cohere families. See [model catalog](docs/model-catalog.md)
+for source versions, refresh time, selection boundary, and current entries.
+
+Model prompts name only the selected clients that consume the choice. Claude Code and Codex alone
+skip model discovery; mixed selections use labels such as `Choose a model for OpenCode` or `Choose
+a model for Hermes and OpenClaw` so their preserved model settings are not implied to change.
+
+Use `rewire configure --debug` to print credential-free discovery traces containing the API,
+resolved URL, HTTP status, Content-Type, response byte count, and a sanitized redirect path. Debug
+mode never prints authentication headers, tokens, or response bodies.
 
 ## Architecture
 

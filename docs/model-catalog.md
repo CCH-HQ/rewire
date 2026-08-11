@@ -101,6 +101,24 @@ and this document in the same change.
 | ByteDance | `doubao-seed-2-1-turbo` | Doubao Seed 2.1 Turbo | `@ai-sdk/openai-compatible` |
 | Cohere | `command-a-plus-05-2026` | Command A Plus | `@ai-sdk/openai-compatible` |
 
-The workflow presents these entries as a single-select list followed by `Custom model ID`. The
-selected preset supplies the initial SDK and display name; both remain editable before the final
-numbered review.
+The workflow probes OpenAI and Anthropic at `/v1/models` and Google at `/v1beta/models` when the
+entered base URL is a site root. An explicitly supplied path prefix is preserved and receives one
+`models` segment. The three authentication shapes are attempted in parallel. Discovered IDs are
+shown first and marked `AVAILABLE`; a provider failure is
+rendered as a warning while other results remain usable. The initial single-select list includes
+`Add all N available models`, discovered models, `Show all catalog models`, and `Custom model ID`.
+Selecting `Add all` writes the complete discovered catalog for OpenCode, OpenClaw, and Hermes, then
+asks for one primary/default model from that same catalog. Selecting `Show all` instead adds the
+local presets after the discovered results and removes duplicate IDs. A preset supplies the initial
+SDK and display name; both remain editable before the final numbered review. The scan
+uses the entered token only for the request, never stores response bodies, caps each response at
+1 MiB, and times out each protocol independently. Each API retries transient request/read failures,
+timeouts, HTTP 429, and HTTP 5xx up to three total attempts with short exponential backoff. Other
+HTTP statuses, redirects, oversized responses, malformed JSON, and incompatible schemas fail on the
+first attempt. Debug diagnostics report the final attempt count without response bodies or secrets.
+
+For OpenCode, each Add all entry retains its SDK family and is written to one of four protocol
+providers: `rewire-oairesp`, `rewire-anthropic`, `rewire-google`, or `rewire-oaicomp`. The primary
+selection points to the matching partition. This prevents a mixed catalog's Claude and Gemini
+entries from inheriting `@ai-sdk/openai-compatible` merely because they share a gateway endpoint.
+Hermes and OpenClaw keep their existing single-provider catalog representations.

@@ -21,7 +21,7 @@ fn final_review_numbers_only_modifications_and_conflicts() {
         model_name: None,
         sdk: None,
     };
-    let plan = build_plan(home.path(), &input).unwrap();
+    let plan = crate::build_plan(home.path(), &input).unwrap();
     let items = numbered_plan_items(&plan);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].number, 1);
@@ -70,7 +70,7 @@ fn malformed_target_gets_a_number_and_reason() {
     let path = home.path().join(".claude/settings.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, "{broken").unwrap();
-    let plan = build_plan(
+    let plan = crate::build_plan(
         home.path(),
         &Input {
             base_url: "https://gateway.example".into(),
@@ -102,8 +102,6 @@ fn workflow_control_text_remains_ascii_for_legacy_windows_code_pages() {
         CLIENT_PROMPT,
         BASE_URL_PROMPT,
         TOKEN_PROMPT,
-        MODEL_PROMPT,
-        CUSTOM_MODEL_PROMPT,
         MODEL_NAME_PROMPT,
         SDK_PROMPT,
         REVIEW_PROMPT,
@@ -133,20 +131,6 @@ fn opencode_sdk_choices_are_typed_and_model_aware() {
             Some(cursor)
         );
     }
-}
-
-#[test]
-fn model_catalog_labels_keep_ids_separate_from_display_names() {
-    let choices = popular_models()
-        .iter()
-        .copied()
-        .map(ModelChoice::Preset)
-        .chain(std::iter::once(ModelChoice::Custom))
-        .collect::<Vec<_>>();
-    assert!(choices.iter().all(|choice| choice.to_string().is_ascii()));
-    let first = choices.first().unwrap().to_string();
-    assert!(first.contains("gpt-5.5"));
-    assert!(first.contains("GPT-5.5"));
 }
 
 #[test]

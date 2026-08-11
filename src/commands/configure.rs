@@ -12,5 +12,5 @@ pub(super) fn run(home: &Path, cli: &Cli, interactive_terminal: bool) -> Result<
             "interactive workflow requires terminal stdin and stdout"
         ));
     }
-    rewire::run_workflow(home, !cli.display.no_color)
+    rewire::run_workflow_with_debug(home, !cli.display.no_color, cli.display.debug)
 }

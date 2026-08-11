@@ -1,6 +1,8 @@
 mod opencode;
 
-use crate::model::{Client, ConditionalRemoval, Format, OpenCodeSdk, Recipe};
+use crate::model::{
+    Client, ConditionalRemoval, Format, ModelConfig, OpenCodeSdk, Recipe, RemovalPredicate,
+};
 use serde_json::{Map, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -12,6 +14,15 @@ pub const CLIENTS: &[Client] = &[
     Client::Hermes,
     Client::OpenClaw,
 ];
+
+/// Borrowed model-selection context shared by the client recipe adapters.
+#[derive(Clone, Copy)]
+pub(crate) struct ModelCatalogOptions<'a> {
+    pub(crate) selected: Option<&'a str>,
+    pub(crate) display_name: Option<&'a str>,
+    pub(crate) sdk: Option<OpenCodeSdk>,
+    pub(crate) models: &'a [ModelConfig],
+}
 
 impl Client {
     /// Build client-specific file recipes without giving adapters ownership of I/O or rollback.
@@ -37,6 +48,34 @@ impl Client {
         model_name: Option<&str>,
         sdk: Option<OpenCodeSdk>,
     ) -> Vec<Recipe> {
+        self.recipes_with_catalog(
+            home,
+            base_url,
+            token,
+            ModelCatalogOptions {
+                selected: model,
+                display_name: model_name,
+                sdk,
+                models: &[],
+            },
+        )
+    }
+
+    /// Build recipes that also publish a discovered model catalog for catalog-aware clients.
+    #[must_use]
+    pub(crate) fn recipes_with_catalog(
+        self,
+        home: &Path,
+        base_url: &str,
+        token: &str,
+        options: ModelCatalogOptions<'_>,
+    ) -> Vec<Recipe> {
+        let ModelCatalogOptions {
+            selected: model,
+            display_name: model_name,
+            sdk,
+            models,
+        } = options;
         match self {
             Self::Claude => claude_recipes(home, base_url, token),
             Self::Codex => codex_recipes(home, base_url, token),
@@ -47,9 +86,10 @@ impl Client {
                 model,
                 model_name,
                 sdk.unwrap_or_else(|| OpenCodeSdk::infer(model)),
+                models,
             ),
-            Self::Hermes => hermes_recipes(home, base_url, token, model),
-            Self::OpenClaw => openclaw_recipes(home, base_url, token, model, model_name),
+            Self::Hermes => hermes_recipes(home, base_url, token, model, models),
+            Self::OpenClaw => openclaw_recipes(home, base_url, token, model, model_name, models),
         }
     }
 
@@ -136,9 +176,11 @@ fn hermes_removal_recipes(home: &Path) -> Vec<Recipe> {
     );
     config.conditional_removals.push(ConditionalRemoval {
         removal_pointer: "/model",
-        condition_pointer: "/model/provider",
-        expected: "rewire",
-        prefix: false,
+        alternatives: vec![vec![RemovalPredicate {
+            pointer: "/model/provider",
+            expected: "rewire".into(),
+            prefix: false,
+        }]],
     });
     vec![
         config,
@@ -256,7 +298,13 @@ fn codex_recipes(home: &Path, base_url: &str, token: &str) -> Vec<Recipe> {
     )]
 }
 
-fn hermes_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>) -> Vec<Recipe> {
+fn hermes_recipes(
+    home: &Path,
+    base_url: &str,
+    token: &str,
+    model: Option<&str>,
+    models: &[ModelConfig],
+) -> Vec<Recipe> {
     let directory = client_directory(home, "HERMES_HOME", ".hermes");
     vec![
         provider_recipe(
@@ -267,16 +315,7 @@ fn hermes_recipes(home: &Path, base_url: &str, token: &str, model: Option<&str>)
                 ("model", hermes_model_selection(model)),
                 (
                     "providers",
-                    object([(
-                        "rewire",
-                        object([
-                            ("name", string("Rewire")),
-                            ("api", string(base_url)),
-                            ("key_env", string("REWIRE_TOKEN")),
-                            ("transport", string("chat_completions")),
-                            ("default_model", string(model.unwrap_or_default())),
-                        ]),
-                    )]),
+                    object([("rewire", hermes_provider(base_url, model, models))]),
                 ),
             ]),
             false,
@@ -299,6 +338,7 @@ fn openclaw_recipes(
     token: &str,
     model: Option<&str>,
     model_name: Option<&str>,
+    models: &[ModelConfig],
 ) -> Vec<Recipe> {
     let directory = client_directory(home, "OPENCLAW_STATE_DIR", ".openclaw");
     let config = client_file_from_env(home, "OPENCLAW_CONFIG_PATH")
@@ -341,7 +381,7 @@ fn openclaw_recipes(
                                     ("baseUrl", string(base_url)),
                                     ("apiKey", secret_ref),
                                     ("api", string("openai-completions")),
-                                    ("models", openclaw_models(model, model_name)),
+                                    ("models", openclaw_models(models, model, model_name)),
                                 ]),
                             )]),
                         ),
@@ -379,7 +419,7 @@ fn structured_recipe(
         format,
         values,
         sensitive,
-        provider_endpoint: None,
+        provider_endpoints: Vec::new(),
         selected_model: None,
         conditional_removals: Vec::new(),
         removal: false,
@@ -408,7 +448,7 @@ fn provider_recipe(
     selected_model: Option<&'static str>,
 ) -> Recipe {
     let mut recipe = structured_recipe(client, path, format, values, sensitive);
-    recipe.provider_endpoint = Some(provider_endpoint);
+    recipe.provider_endpoints.push(provider_endpoint);
     recipe.selected_model = selected_model;
     recipe
 }
@@ -420,9 +460,11 @@ fn plain_recipe(client: Client, path: PathBuf, token: &str) -> Recipe {
 fn rewire_model_reference_removal(pointer: &'static str) -> ConditionalRemoval {
     ConditionalRemoval {
         removal_pointer: pointer,
-        condition_pointer: pointer,
-        expected: "rewire/",
-        prefix: true,
+        alternatives: vec![vec![RemovalPredicate {
+            pointer,
+            expected: "rewire/".into(),
+            prefix: true,
+        }]],
     }
 }
 
@@ -437,18 +479,54 @@ fn hermes_model_selection(model: Option<&str>) -> Value {
     ])
 }
 
-fn openclaw_models(model: Option<&str>, model_name: Option<&str>) -> Value {
+fn openclaw_models(models: &[ModelConfig], model: Option<&str>, model_name: Option<&str>) -> Value {
+    if models.is_empty() {
+        return Value::Array(
+            model
+                .map(|model| {
+                    object([
+                        ("id", string(model)),
+                        ("name", string(model_name.unwrap_or(model))),
+                    ])
+                })
+                .into_iter()
+                .collect(),
+        );
+    }
     Value::Array(
-        model
+        models
+            .iter()
             .map(|model| {
                 object([
-                    ("id", string(model)),
-                    ("name", string(model_name.unwrap_or(model))),
+                    ("id", string(&model.id)),
+                    (
+                        "name",
+                        string(model.display_name.as_deref().unwrap_or(&model.id)),
+                    ),
                 ])
             })
-            .into_iter()
             .collect(),
     )
+}
+
+fn hermes_provider(base_url: &str, model: Option<&str>, models: &[ModelConfig]) -> Value {
+    let mut provider = Map::from_iter([
+        ("name".to_owned(), string("Rewire")),
+        ("api".to_owned(), string(base_url)),
+        ("key_env".to_owned(), string("REWIRE_TOKEN")),
+        ("transport".to_owned(), string("chat_completions")),
+        (
+            "default_model".to_owned(),
+            string(model.unwrap_or_default()),
+        ),
+    ]);
+    if !models.is_empty() {
+        provider.insert(
+            "models".to_owned(),
+            Value::Array(models.iter().map(|model| string(&model.id)).collect()),
+        );
+    }
+    Value::Object(provider)
 }
 
 fn client_directory(home: &Path, variable: &str, fallback: &str) -> PathBuf {

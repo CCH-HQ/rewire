@@ -30,8 +30,10 @@ for config-file and environment-variable setup patterns. Adapter fields and path
 after confirmation from the primary references above or a current installed client. The resulting
 evidence matrix and known documentation drift are recorded in `docs/client-compatibility.md`.
 
-OpenCode 1.18.15 reports `/Users/esap/.config/opencode` as its global config directory. Its current
+OpenCode 1.18.16 reports `/Users/esap/.config/opencode` as its global config directory. Its current
 loader prefers `opencode.jsonc`, then `opencode.json`, then the legacy `config.json` when choosing a
 global file to patch; the fixtures therefore exercise the preferred `opencode.jsonc` target.
 Its schema and provider loader keep the catalog key, API model ID, display name, and npm SDK
-package separate; the OpenCode fixture tests those distinctions with a GPT-shaped provider.
+package separate for custom providers. The same official documentation confirms that any built-in
+provider can override `options.baseURL`; OpenAI and Anthropic then keep their Models.dev-backed
+catalogs without a hand-authored `models` map. Adapter integration tests cover both shapes.

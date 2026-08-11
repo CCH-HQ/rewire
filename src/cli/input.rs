@@ -56,10 +56,10 @@ pub(crate) struct Cli {
     /// Model ID required for opencode, hermes, and openclaw; Claude and Codex retain their model.
     #[arg(long, global = true)]
     pub(crate) model: Option<String>,
-    /// `OpenCode` or `OpenClaw` catalog display name; defaults to the provider-native model ID.
+    /// Custom-provider `OpenCode` or `OpenClaw` catalog display name; defaults to the model ID.
     #[arg(long, global = true)]
     pub(crate) model_name: Option<String>,
-    /// `OpenCode` AI SDK: openai, anthropic, google, or openai-compatible.
+    /// `OpenCode` provider protocol: openai, anthropic, google, or openai-compatible.
     #[arg(long, global = true)]
     pub(crate) sdk: Option<String>,
     #[command(flatten)]
@@ -91,6 +91,9 @@ pub(crate) struct DisplayOptions {
     /// Emit stable machine-readable JSON.
     #[arg(long, global = true)]
     pub(crate) json: bool,
+    /// Print credential-free model discovery diagnostics in the guided workflow.
+    #[arg(long, global = true)]
+    pub(crate) debug: bool,
     /// Disable colors in help, errors, and the guided workflow.
     #[arg(long, global = true)]
     pub(crate) no_color: bool,

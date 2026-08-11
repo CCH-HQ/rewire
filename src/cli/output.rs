@@ -289,8 +289,21 @@ fn render_plan(plan: &Plan, palette: Palette) -> Result<String> {
     if let Some(model_name) = &plan.model_name {
         writeln!(text, "{} {}", palette.muted("Model name:"), model_name)?;
     }
+    if !plan.models.is_empty() {
+        writeln!(
+            text,
+            "{} {}",
+            palette.muted("Catalog models:"),
+            plan.models.len()
+        )?;
+    }
     if let Some(sdk) = &plan.sdk {
-        writeln!(text, "{} {}", palette.muted("OpenCode SDK:"), sdk)?;
+        let (label, value) = match sdk.as_str() {
+            "@ai-sdk/openai" => ("OpenCode provider:", "openai (native model catalog)"),
+            "@ai-sdk/anthropic" => ("OpenCode provider:", "anthropic (native model catalog)"),
+            _ => ("OpenCode SDK:", sdk.as_str()),
+        };
+        writeln!(text, "{} {}", palette.muted(label), value)?;
     }
     if plan.model.is_some() || plan.sdk.is_some() {
         writeln!(text)?;
