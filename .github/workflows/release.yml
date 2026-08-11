@@ -105,11 +105,29 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@v5
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
+
+      - name: Extract curated release notes
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          notes=${RUNNER_TEMP}/rewire-release-notes.md
+          awk -v heading="## [${version}]" '
+            index($0, heading) == 1 { capture = 1; next }
+            capture && /^## \[/ { exit }
+            capture && /^\[[^]]+\]:[[:space:]]/ { exit }
+            capture { print }
+            END { if (!capture) exit 1 }
+          ' CHANGELOG.md > "${notes}"
+          test -s "${notes}"
 
       - name: Generate aggregate checksums
         shell: bash
@@ -137,6 +155,6 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/rewire-release-notes.md
           fail_on_unmatched_files: true
           files: dist/*
