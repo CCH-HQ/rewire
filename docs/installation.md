@@ -114,6 +114,28 @@ sh /tmp/rewire-install.sh \
 The frontend should avoid embedding API tokens in a command string. Use the guided prompt,
 `REWIRE_TOKEN`, or `--token-stdin` so shell history and process listings do not retain credentials.
 
+## Docker end-to-end verification
+
+The live installer test builds a release archive inside the pinned Rust container, serves that
+archive and `SHA256SUMS` over an isolated Docker network, installs it in a fresh container, and
+configures all five clients under a temporary Home. It then checks adapter output, a second
+idempotent plan, credential file permissions, transaction redaction, and an authenticated
+`/v1/models` response. The host's real client configuration is never mounted.
+
+Place the API token and base URL in ignored local files, then run:
+
+```bash
+mkdir -p tmp
+(umask 077 && printf '%s' "$REWIRE_TOKEN" > tmp/key)
+printf '%s' 'https://api.example.com/' > tmp/domain
+sh scripts/tests/install-docker-e2e.sh
+```
+
+Alternate paths can be supplied with `--key-file` and `--domain-file`. Use `--skip-api-probe`
+for an offline installer/configuration run; all other assertions still execute. The token is
+mounted read-only and sent to Rewire through standard input, never through Docker arguments,
+environment variables, image layers, or logs.
+
 ## Platform assets
 
 | Platform | Release asset |

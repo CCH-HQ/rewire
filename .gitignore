@@ -13,6 +13,13 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# Local credentials and live E2E inputs. Never commit this directory.
+tmp/
+
+# Python is used only by test verification; keep its bytecode out of the tree.
+**/__pycache__/
+*.py[cod]
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
