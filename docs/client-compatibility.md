@@ -9,9 +9,9 @@ reviewed, written, verified, and rolled back together.
 | Client | Main configuration | Credential strategy | Model behavior |
 | --- | --- | --- | --- |
 | Claude Code | `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json` | `env.ANTHROPIC_AUTH_TOKEN` in the client settings | Existing model selection is preserved |
-| Codex | `$CODEX_HOME/config.toml` or `~/.codex/config.toml` | Isolated provider `experimental_bearer_token`; existing `auth.json` or keyring login is untouched | Adds `profiles.rewire` without setting a model in that profile or globally; a bare gateway origin becomes the Responses `/v1` base |
+| Codex | `$CODEX_HOME/rewire.config.toml` or `~/.codex/rewire.config.toml` | Isolated provider `experimental_bearer_token`; existing `config.toml`, `auth.json`, and keyring login stay independent | Writes a profile-v2 layer selected with `--profile rewire`, without setting a model; a bare gateway origin becomes the Responses `/v1` base |
 | OpenCode | `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_DIR`, XDG config, or the native global-file preference | `{file:...}` reference to a private Rewire token file | Requires `--model`; a single OpenAI/Anthropic model reuses its native provider, while Add all splits the discovered catalog into four Rewire-managed protocol providers with protocol-specific request roots |
-| Hermes Agent | `$HERMES_HOME/config.yaml` or the platform-native Hermes directory | `REWIRE_TOKEN` in the matching `.env` through `key_env` | Requires `--model`; writes `model.default`, `model.provider`, and a keyed `providers.rewire` entry; Add all writes a model dictionary under that provider |
+| Hermes Agent | `$HERMES_HOME/config.yaml` or the platform-native Hermes directory | `REWIRE_TOKEN` in the matching `.env` through `key_env` | Requires `--model`; writes `model.default`, `model.provider`, and a keyed `providers.rewire` entry with a model-native transport; Add all writes a model dictionary under that provider |
 | OpenClaw | `$OPENCLAW_CONFIG_PATH` or `$OPENCLAW_STATE_DIR/openclaw.json` | `file` SecretRef backed by the selected state directory | Requires `--model`; catalogs raw `<id>` and selects `rewire/<id>` as `agents.defaults.model.primary`; every catalog entry retains its own transport and request root |
 
 Secret-bearing targets are written with mode `0600` on Unix. Transaction directories use `0700`,
@@ -45,6 +45,9 @@ bare origin, Rewire writes the version root expected by the receiving SDK or tra
 | Codex Responses | `<origin>/v1` |
 | OpenCode OpenAI, Anthropic, or OpenAI-compatible SDK | `<origin>/v1` |
 | OpenCode Google SDK | `<origin>/v1beta` |
+| Hermes Anthropic Messages model | Original origin; Hermes appends `/v1/messages` |
+| Hermes OpenAI Responses model | `<origin>/v1` |
+| Hermes Google or OpenAI-compatible model | `<origin>/v1` through Hermes' OpenAI-compatible Chat Completions transport |
 | OpenClaw OpenAI Responses or Completions model | `<origin>/v1` |
 | OpenClaw Anthropic Messages model | Original origin |
 | OpenClaw Google Generative AI model | `<origin>/v1beta` |
@@ -164,6 +167,29 @@ own legacy-to-v12 conversion emits `default_model` plus a model dictionary. Rewi
 `base_url`, `api_mode`, `model`, model-list, and `model.name` aliases only when the provider still
 uses `REWIRE_TOKEN`; provider extensions and unrelated model fields remain intact. Removal is
 field-scoped and preserves operator-owned model settings such as `context_length`.
+
+Hermes user providers accept `anthropic_messages`, `codex_responses`, and `chat_completions` as
+distinct transports. Rewire writes `anthropic_messages` for Claude-family models, so a bare
+gateway origin is retained and Hermes reaches its native `/v1/messages` route. OpenAI-family models
+use `codex_responses` with an OpenAI `/v1` root; Google and generic compatible models use the
+current Hermes custom-provider fallback, `chat_completions` against `/v1`. Hermes does not expose a
+Google-native custom-provider transport in the inspected release, so its fallback is explicit
+rather than being represented as a Google-native provider.
+
+## Runtime verification
+
+`scripts/tests/install-docker-e2e.sh` builds the Linux release archive, serves it over an isolated
+Docker network, configures a temporary Home through the installed binary, and then runs pinned
+official clients against the resulting files. The runtime layer checks the fixed model response
+`REWIRE_E2E_OK`, each client-specific success state, selected provider/model where available, and
+an exhaustive token scan of captured runtime files. OpenClaw launches an isolated loopback Gateway
+because its file SecretRefs are resolved from the Gateway snapshot; the Gateway control token is a
+fixed test-only value separate from the model API credential.
+
+The 2026-08-11 live run passed with Claude Code `2.1.186`, Codex CLI `0.147.0`, OpenCode `1.18.16`,
+Hermes Agent `0.19.0` with its official `anthropic` extra, and OpenClaw `2026.7.1-2`. It used the
+gateway's advertised Claude model and separately confirmed Codex `gpt-5.5`; the host's real client
+directories were never mounted.
 
 `rewire doctor` reports relevant environment variable names for every supported client while
 always hiding their values. Planning Claude Code also warns when process-level

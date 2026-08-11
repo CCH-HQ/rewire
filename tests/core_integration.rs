@@ -135,9 +135,14 @@ fn codex_and_opencode_recipes_follow_current_official_provider_shapes() {
     let home = std::path::Path::new("/fixture-home");
     let endpoint = "https://gateway.example/v1";
 
-    let codex = Client::Codex.recipes(home, endpoint, "TOKEN", Some("coder-model"))[0]
-        .values
-        .clone();
+    let codex_recipes = Client::Codex.recipes(home, endpoint, "TOKEN", Some("coder-model"));
+    assert_eq!(codex_recipes[0].path, home.join(".codex/config.toml"));
+    assert_eq!(
+        codex_recipes[1].path,
+        home.join(".codex/rewire.config.toml")
+    );
+    let codex = codex_recipes[1].values.clone();
+    assert_eq!(codex["model_provider"], "rewire");
     assert_eq!(
         codex.pointer("/model_providers/rewire/base_url").unwrap(),
         endpoint
@@ -158,11 +163,7 @@ fn codex_and_opencode_recipes_follow_current_official_provider_shapes() {
             .unwrap(),
         false
     );
-    assert_eq!(
-        codex.pointer("/profiles/rewire/model_provider").unwrap(),
-        "rewire"
-    );
-    assert!(codex.pointer("/profiles/rewire/model").is_none());
+    assert!(codex.get("model").is_none());
 
     let opencode_recipes = Client::OpenCode.recipes(home, endpoint, "TOKEN", Some("coder-model"));
     let opencode_recipe = &opencode_recipes[0];
@@ -392,6 +393,31 @@ fn hermes_and_openclaw_recipes_follow_current_official_provider_shapes() {
         home.join(".openclaw/secrets/rewire-token")
     );
     assert!(openclaw.pointer("/providers/rewire").is_none());
+}
+
+#[test]
+fn hermes_recipe_uses_the_selected_models_native_protocol() {
+    let recipes = Client::Hermes.recipes_with_options(
+        std::path::Path::new("/fixture-home"),
+        "https://gateway.example/",
+        "TOKEN",
+        Some("claude-sonnet-4-6"),
+        Some("Claude Sonnet 4.6"),
+        Some(OpenCodeSdk::Anthropic),
+    );
+    let config = &recipes[0].values;
+    assert_eq!(
+        config.pointer("/providers/rewire/transport").unwrap(),
+        "anthropic_messages"
+    );
+    assert_eq!(
+        config.pointer("/providers/rewire/api").unwrap(),
+        "https://gateway.example/"
+    );
+    assert_eq!(
+        config.pointer("/model/base_url").unwrap(),
+        "https://gateway.example/"
+    );
 }
 
 #[test]
@@ -935,7 +961,18 @@ fn three_way_toml_rollback_preserves_later_unrelated_table() {
     let dir = tempdir().unwrap();
     let config = dir.path().join(".codex/config.toml");
     fs::create_dir_all(config.parent().unwrap()).unwrap();
-    fs::write(&config, "[history]\nsave_history = true\n").unwrap();
+    fs::write(
+        &config,
+        concat!(
+            "[history]\n",
+            "save_history = true\n",
+            "[model_providers.rewire]\n",
+            "base_url = \"https://legacy.example/v1\"\n",
+            "[profiles.rewire]\n",
+            "model_provider = \"rewire\"\n",
+        ),
+    )
+    .unwrap();
     let input = Input {
         base_url: "https://gateway.example/v1".into(),
         token: Secret::new("secret").unwrap(),
@@ -954,8 +991,15 @@ fn three_way_toml_rollback_preserves_later_unrelated_table() {
     let parsed: Value = toml_edit::de::from_str(&restored).unwrap();
     assert_eq!(parsed.pointer("/history/save_history").unwrap(), true);
     assert_eq!(parsed.pointer("/manual/keep").unwrap(), true);
-    assert!(parsed.pointer("/model_providers/rewire/base_url").is_none());
-    assert!(parsed.pointer("/profiles/rewire/model_provider").is_none());
+    assert_eq!(
+        parsed.pointer("/model_providers/rewire/base_url").unwrap(),
+        "https://legacy.example/v1"
+    );
+    assert_eq!(
+        parsed.pointer("/profiles/rewire/model_provider").unwrap(),
+        "rewire"
+    );
+    assert!(!dir.path().join(".codex/rewire.config.toml").exists());
     assert!(!restored.contains("secret"));
 }
 
@@ -1110,6 +1154,9 @@ fn all_client_recipes_write_parseable_configurations() {
     assert_eq!(tx.entries.len(), 8);
     for client in CLIENTS {
         for recipe in client.recipes(dir.path(), &plan.base_url, "secret", Some("coder-model")) {
+            if !recipe.path.exists() {
+                continue;
+            }
             let bytes = fs::read(&recipe.path).unwrap();
             match recipe.format {
                 Format::Json => {
@@ -1473,7 +1520,7 @@ fn remove_plan_deletes_only_adapter_owned_fields_and_can_be_rolled_back() {
             .iter()
             .filter(|change| matches!(change.action, Action::Delete))
             .count(),
-        2
+        3
     );
     let removed = apply_plan(dir.path(), &remove_plan).unwrap();
 
@@ -1481,10 +1528,7 @@ fn remove_plan_deletes_only_adapter_owned_fields_and_can_be_rolled_back() {
         serde_json::from_slice(&fs::read(dir.path().join(".claude/settings.json")).unwrap())
             .unwrap();
     assert!(claude.pointer("/env/ANTHROPIC_BASE_URL").is_none());
-    let codex: Value =
-        toml_edit::de::from_slice(&fs::read(dir.path().join(".codex/config.toml")).unwrap())
-            .unwrap();
-    assert!(codex.pointer("/model_providers/rewire").is_none());
+    assert!(!dir.path().join(".codex/rewire.config.toml").exists());
     let opencode: Value = serde_json::from_slice(
         &fs::read(dir.path().join(".config/opencode/opencode.jsonc")).unwrap(),
     )

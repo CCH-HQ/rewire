@@ -64,11 +64,13 @@ jobs:
         run: |
           shellcheck scripts/install.sh \
             scripts/tests/install-unix.sh \
-            scripts/tests/install-docker-e2e.sh
+            scripts/tests/install-docker-e2e.sh \
+            scripts/tests/client-runtime-e2e.sh \
+            scripts/tests/runtime/*.sh
 
       - name: Check Docker E2E verifier syntax
         run: |
-          python3 -c 'from pathlib import Path; p = Path("scripts/tests/verify-docker-e2e.py"); compile(p.read_bytes(), str(p), "exec")'
+          python3 -c 'from pathlib import Path; files = [Path("scripts/tests/verify-docker-e2e.py"), Path("scripts/tests/verify-client-runtime.py")]; [compile(path.read_bytes(), str(path), "exec") for path in files]'
 
       - name: Test Unix installer
         run: sh scripts/tests/install-unix.sh

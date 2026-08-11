@@ -1,8 +1,10 @@
 use super::{
     honor_client_environment, object, provider_endpoint_alias, provider_recipe, removal_recipe,
-    string, structured_recipe,
+    string, structured_recipe, versioned_root_url,
 };
-use crate::model::{Client, ConditionalRemoval, Format, ModelConfig, Recipe, RemovalPredicate};
+use crate::model::{
+    Client, ConditionalRemoval, Format, ModelConfig, OpenCodeSdk, Recipe, RemovalPredicate,
+};
 use serde_json::{Map, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -15,18 +17,23 @@ pub(super) fn recipes(
     base_url: &str,
     token: &str,
     model: Option<&str>,
+    selected_sdk: OpenCodeSdk,
     models: &[ModelConfig],
 ) -> Vec<Recipe> {
     let directory = config_directory(home);
+    let runtime_base_url = hermes_base_url(base_url, selected_sdk);
     let mut config = provider_recipe(
         Client::Hermes,
         directory.join("config.yaml"),
         Format::Yaml,
         object([
-            ("model", model_selection(base_url, model)),
+            ("model", model_selection(&runtime_base_url, model)),
             (
                 "providers",
-                object([("rewire", provider(base_url, model, models))]),
+                object([(
+                    "rewire",
+                    provider(&runtime_base_url, model, selected_sdk, models),
+                )]),
             ),
         ]),
         false,
@@ -102,15 +109,41 @@ fn model_selection(base_url: &str, model: Option<&str>) -> Value {
     ])
 }
 
-fn provider(base_url: &str, model: Option<&str>, models: &[ModelConfig]) -> Value {
+fn provider(
+    base_url: &str,
+    model: Option<&str>,
+    selected_sdk: OpenCodeSdk,
+    models: &[ModelConfig],
+) -> Value {
     object([
         ("name", string("Rewire")),
         ("api", string(base_url)),
         ("key_env", string(PROVIDER_KEY_ENV)),
-        ("transport", string("chat_completions")),
+        ("transport", string(hermes_transport(selected_sdk))),
         ("default_model", string(model.unwrap_or_default())),
         ("models", Value::Object(provider_models(models, model))),
     ])
+}
+
+const fn hermes_transport(sdk: OpenCodeSdk) -> &'static str {
+    match sdk {
+        OpenCodeSdk::OpenAi => "codex_responses",
+        OpenCodeSdk::Anthropic => "anthropic_messages",
+        // Hermes 0.19 exposes no user-provider Google transport. Google and generic compatible
+        // models therefore use the gateway's OpenAI-compatible chat-completions surface.
+        OpenCodeSdk::Google | OpenCodeSdk::OpenAiCompatible => "chat_completions",
+    }
+}
+
+fn hermes_base_url(base_url: &str, sdk: OpenCodeSdk) -> String {
+    match sdk {
+        // The Anthropic SDK appends `/v1/messages`; all other supported custom transports append
+        // their operation below an OpenAI-compatible `/v1` root.
+        OpenCodeSdk::Anthropic => base_url.to_owned(),
+        OpenCodeSdk::OpenAi | OpenCodeSdk::Google | OpenCodeSdk::OpenAiCompatible => {
+            versioned_root_url(base_url, "v1")
+        }
+    }
 }
 
 fn provider_models(models: &[ModelConfig], selected: Option<&str>) -> Map<String, Value> {

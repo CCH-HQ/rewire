@@ -35,8 +35,15 @@ pub fn merge_recipe(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<u8>>
                 .transpose()?
                 .unwrap_or_default();
             for (section, val) in recipe.values.as_object().expect("recipe object") {
-                let item = doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-                merge_toml_item(item, val)?;
+                if val.is_object() {
+                    let item =
+                        doc[section].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                    merge_toml_item(item, val)?;
+                } else {
+                    // Profile-v2 and other current TOML schemas use top-level scalar selectors.
+                    // Replace only that scalar while preserving all unrelated document trivia.
+                    doc[section] = toml_value(val)?;
+                }
             }
             Ok(doc.to_string().into_bytes())
         }
@@ -469,6 +476,11 @@ fn rollback_toml(current: &[u8], changes: &[FieldChange]) -> Result<Vec<u8>> {
             .ok_or_else(|| anyhow!("transaction attempted to replace the TOML root"))?;
         let mut table = document.as_table_mut();
         for parent in parents {
+            if table.get(parent).is_none() && change.before.is_some() && change.after.is_none() {
+                // A removal can delete its now-empty parent table. Recreate that path when a
+                // three-way rollback restores the removed fields beside later unrelated edits.
+                table[parent] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
             table = table
                 .get_mut(parent)
                 .and_then(toml_edit::Item::as_table_mut)

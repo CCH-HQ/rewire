@@ -7,6 +7,7 @@ key_file=${REWIRE_E2E_KEY_FILE:-$root/tmp/key}
 domain_file=${REWIRE_E2E_DOMAIN_FILE:-$root/tmp/domain}
 image=${REWIRE_E2E_IMAGE:-rust:1.94.0-bookworm}
 skip_api_probe=0
+skip_client_calls=0
 
 usage() {
     cat <<'EOF'
@@ -20,6 +21,7 @@ Options:
   --domain-file <PATH>  API base URL file (default: tmp/domain)
   --image <IMAGE>       Builder/client image (default: rust:1.94.0-bookworm)
   --skip-api-probe      Skip the authenticated /v1/models compatibility probe
+  --skip-client-calls   Skip launching the five official client CLIs
   -h, --help            Print this help
 
 The API token is mounted read-only and passed to Rewire through stdin. It is never
@@ -55,6 +57,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --skip-api-probe)
             skip_api_probe=1
+            shift
+            ;;
+        --skip-client-calls)
+            skip_client_calls=1
             shift
             ;;
         -h | --help)
@@ -232,6 +238,15 @@ verify_args=
 if [ "$skip_api_probe" -eq 1 ]; then
     verify_args=--skip-api-probe
 fi
+
+if [ "$skip_client_calls" -eq 0 ]; then
+    sh "$root/scripts/tests/client-runtime-e2e.sh" \
+        --home-dir "$home_dir" \
+        --key-file "$key_file" \
+        --logs-dir "$logs/runtime" \
+        --work-dir "$tmpdir/client-runtime"
+fi
+
 docker run --rm \
     --volume "$root/scripts/tests/verify-docker-e2e.py:/verify.py:ro" \
     --volume "$key_file:/run/rewire/key:ro" \

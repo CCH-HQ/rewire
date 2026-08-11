@@ -957,7 +957,13 @@ fn claude_and_codex_preserve_model_selection_even_when_model_is_supplied() {
     assert!(value["plan"].get("model").is_none());
     let codex: Value = toml_edit::de::from_slice(&fs::read(codex).unwrap()).unwrap();
     assert_eq!(codex["model"], "existing-model");
-    assert!(codex.pointer("/profiles/rewire/model").is_none());
+    assert!(codex.pointer("/profiles/rewire").is_none());
+    let profile: Value = toml_edit::de::from_slice(
+        &fs::read(home.path().join(".codex/rewire.config.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(profile["model_provider"], "rewire");
+    assert!(profile.get("model").is_none());
 }
 
 #[test]
@@ -1067,7 +1073,7 @@ fn real_client_fixtures_keep_unrelated_configuration() {
             .stdout
             .clone();
         assert!(!String::from_utf8_lossy(&output).contains("fixture-secret"));
-        let content = fs::read_to_string(target_path).unwrap();
+        let content = fs::read_to_string(&target_path).unwrap();
         for preserved in case.preserved {
             assert!(
                 content.contains(preserved),
@@ -1075,9 +1081,13 @@ fn real_client_fixtures_keep_unrelated_configuration() {
                 case.name
             );
         }
+        let adapter_path = case
+            .adapter_target
+            .map_or(target_path, |path| home.path().join(path));
+        let adapter_content = fs::read_to_string(adapter_path).unwrap();
         for adapter_marker in case.adapter {
             assert!(
-                content.contains(adapter_marker),
+                adapter_content.contains(adapter_marker),
                 "{} fixture did not receive {adapter_marker}",
                 case.name
             );

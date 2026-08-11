@@ -92,7 +92,14 @@ impl Client {
                 sdk.unwrap_or_else(|| OpenCodeSdk::infer(model)),
                 models,
             ),
-            Self::Hermes => hermes::recipes(home, base_url, token, model, models),
+            Self::Hermes => hermes::recipes(
+                home,
+                base_url,
+                token,
+                model,
+                sdk.unwrap_or_else(|| OpenCodeSdk::infer(model)),
+                models,
+            ),
             Self::OpenClaw => openclaw::recipes(
                 home,
                 base_url,

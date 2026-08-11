@@ -117,8 +117,8 @@ def main() -> None:
     plan = read_json(logs / "idempotent.stdout")
     changes = plan.get("changes")
     require(
-        isinstance(changes, list) and len(changes) == 8,
-        "idempotency plan must cover all eight client files",
+        isinstance(changes, list) and len(changes) == 9,
+        "idempotency plan must cover all nine adapter recipes",
     )
     require(
         all(isinstance(change, dict) and change.get("action") == "noop" for change in changes),
@@ -135,8 +135,9 @@ def main() -> None:
         "Claude token is incorrect",
     )
 
-    with (home / ".codex/config.toml").open("rb") as stream:
+    with (home / ".codex/rewire.config.toml").open("rb") as stream:
         codex = tomllib.load(stream)
+    require(codex.get("model_provider") == "rewire", "Codex profile provider is incorrect")
     codex_provider = nested(codex, "model_providers", "rewire")
     require(nested(codex_provider, "base_url") == f"{domain}/v1", "Codex base URL is incorrect")
     require(
@@ -165,7 +166,12 @@ def main() -> None:
     assert_private(opencode_secret)
 
     hermes = (home / ".hermes/config.yaml").read_text(encoding="utf-8")
-    for fragment in (f"default: {MODEL_ID}", f"api: {domain}", "key_env: REWIRE_TOKEN"):
+    for fragment in (
+        f"default: {MODEL_ID}",
+        f"api: {domain}",
+        "key_env: REWIRE_TOKEN",
+        "transport: anthropic_messages",
+    ):
         require(fragment in hermes, f"Hermes config omitted {fragment.split(':', 1)[0]}")
     hermes_env = home / ".hermes/.env"
     require(token_bytes in hermes_env.read_bytes(), "Hermes environment file omitted the API token")

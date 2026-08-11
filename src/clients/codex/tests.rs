@@ -7,7 +7,12 @@ fn bare_origin_gets_responses_version_prefix() {
         Path::new("/fixture-home"),
         "https://gateway.example",
         "TOKEN",
-    )[0];
+    )[1];
+    assert_eq!(
+        recipe.path,
+        Path::new("/fixture-home/.codex/rewire.config.toml")
+    );
+    assert_eq!(recipe.values["model_provider"], "rewire");
     assert_eq!(
         recipe.values["model_providers"]["rewire"]["base_url"],
         "https://gateway.example/v1"
@@ -20,7 +25,7 @@ fn explicit_gateway_path_is_not_rewritten() {
         Path::new("/fixture-home"),
         "https://gateway.example/api/codex",
         "TOKEN",
-    )[0];
+    )[1];
     assert_eq!(
         recipe.values["model_providers"]["rewire"]["base_url"],
         "https://gateway.example/api/codex"

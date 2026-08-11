@@ -120,7 +120,10 @@ The live installer test builds a release archive inside the pinned Rust containe
 archive and `SHA256SUMS` over an isolated Docker network, installs it in a fresh container, and
 configures all five clients under a temporary Home. It then checks adapter output, a second
 idempotent plan, credential file permissions, transaction redaction, and an authenticated
-`/v1/models` response. The host's real client configuration is never mounted.
+`/v1/models` response. By default it also installs pinned official Claude Code, Codex, OpenCode,
+Hermes Agent, and OpenClaw CLIs, makes one real model call through each Rewire-generated
+configuration, validates each native success record, and scans every captured runtime file for the
+API token. The host's real client configuration is never mounted.
 
 Place the API token and base URL in ignored local files, then run:
 
@@ -132,9 +135,10 @@ sh scripts/tests/install-docker-e2e.sh
 ```
 
 Alternate paths can be supplied with `--key-file` and `--domain-file`. Use `--skip-api-probe`
-for an offline installer/configuration run; all other assertions still execute. The token is
-mounted read-only and sent to Rewire through standard input, never through Docker arguments,
-environment variables, image layers, or logs.
+to omit only the authenticated Models endpoint check, and `--skip-client-calls` to omit the real
+client runtime layer. An offline installer/configuration run needs both flags. The token is mounted
+read-only and sent to Rewire through standard input, never through Docker arguments, environment
+variables, image layers, or logs.
 
 ## Platform assets
 

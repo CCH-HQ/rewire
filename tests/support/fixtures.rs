@@ -3,6 +3,7 @@ pub(crate) struct FixtureCase {
     pub(crate) client: &'static str,
     pub(crate) fixture: &'static str,
     pub(crate) target: &'static str,
+    pub(crate) adapter_target: Option<&'static str>,
     pub(crate) preserved: &'static [&'static str],
     pub(crate) adapter: &'static [&'static str],
 }
@@ -13,6 +14,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "claude",
         fixture: "tests/fixtures/claude/settings.json",
         target: ".claude/settings.json",
+        adapter_target: None,
         preserved: &["permissions", "Notification"],
         adapter: &["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     },
@@ -21,6 +23,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "claude",
         fixture: "tests/fixtures/claude/settings-machine-shaped.json",
         target: ".claude/settings.json",
+        adapter_target: None,
         preserved: &["statusLine", "enabledPlugins", "autoCompactEnabled"],
         adapter: &["https://fixture-gateway.example", "fixture-secret"],
     },
@@ -29,14 +32,20 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "codex",
         fixture: "tests/fixtures/codex/config.toml",
         target: ".codex/config.toml",
+        adapter_target: Some(".codex/rewire.config.toml"),
         preserved: &["[history]", "model_providers.existing"],
-        adapter: &["model_providers.rewire", "wire_api = \"responses\""],
+        adapter: &[
+            "model_provider = \"rewire\"",
+            "model_providers.rewire",
+            "wire_api = \"responses\"",
+        ],
     },
     FixtureCase {
         name: "codex-machine-shaped",
         client: "codex",
         fixture: "tests/fixtures/codex/config-machine-shaped.toml",
         target: ".codex/config.toml",
+        adapter_target: Some(".codex/rewire.config.toml"),
         preserved: &[
             "[features]",
             "[mcp_servers.docs]",
@@ -45,7 +54,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         adapter: &[
             "model_providers.rewire",
             "experimental_bearer_token = \"fixture-secret\"",
-            "profiles.rewire",
+            "model_provider = \"rewire\"",
         ],
     },
     FixtureCase {
@@ -53,6 +62,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "opencode",
         fixture: "tests/fixtures/opencode/opencode.jsonc",
         target: ".config/opencode/opencode.jsonc",
+        adapter_target: None,
         preserved: &["Operator-owned comment", "theme", "existing"],
         adapter: &[
             "@ai-sdk/openai-compatible",
@@ -65,6 +75,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "opencode",
         fixture: "tests/fixtures/opencode/opencode-official-shaped.jsonc",
         target: ".config/opencode/opencode.jsonc",
+        adapter_target: None,
         preserved: &["$schema", "gpt-5.5", "GPT-5.5", "instructions"],
         adapter: &[
             "@ai-sdk/openai-compatible",
@@ -77,6 +88,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "hermes",
         fixture: "tests/fixtures/hermes/config.yaml",
         target: ".hermes/config.yaml",
+        adapter_target: None,
         preserved: &["features:", "existing:"],
         adapter: &[
             "key_env: REWIRE_TOKEN",
@@ -90,6 +102,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "hermes",
         fixture: "tests/fixtures/hermes/config-official-shaped.yaml",
         target: ".hermes/config.yaml",
+        adapter_target: None,
         preserved: &["terminal:", "compression:", "fallback_providers:"],
         adapter: &[
             "api: https://fixture-gateway.example",
@@ -104,6 +117,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "openclaw",
         fixture: "tests/fixtures/openclaw/openclaw.json",
         target: ".openclaw/openclaw.json",
+        adapter_target: None,
         preserved: &["gateway", "existing"],
         adapter: &[
             "models",
@@ -117,6 +131,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "openclaw",
         fixture: "tests/fixtures/openclaw/openclaw-official-shaped.json",
         target: ".openclaw/openclaw.json",
+        adapter_target: None,
         preserved: &[
             "existing-proxy",
             "~/workspace",
