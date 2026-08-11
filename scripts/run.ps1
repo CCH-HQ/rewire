@@ -175,39 +175,39 @@ try {
     }
 
     $InstallDir = Join-Path $TemporaryDirectory "bin"
-    $InstallerArgs = [System.Collections.Generic.List[string]]::new()
-    $InstallerArgs.Add("--release")
-    $InstallerArgs.Add($Release)
+    $InstallArguments = [System.Collections.Generic.List[string]]::new()
+    $InstallArguments.Add("--release")
+    $InstallArguments.Add($Release)
     if ($AssetBaseUrl) {
-        $InstallerArgs.Add("--asset-base-url")
-        $InstallerArgs.Add($AssetBaseUrl)
+        $InstallArguments.Add("--asset-base-url")
+        $InstallArguments.Add($AssetBaseUrl)
     }
     if ($DownloadUrl) {
-        $InstallerArgs.Add("--download-url")
-        $InstallerArgs.Add($DownloadUrl)
+        $InstallArguments.Add("--download-url")
+        $InstallArguments.Add($DownloadUrl)
     }
     if ($ChecksumUrl) {
-        $InstallerArgs.Add("--checksum-url")
-        $InstallerArgs.Add($ChecksumUrl)
+        $InstallArguments.Add("--checksum-url")
+        $InstallArguments.Add($ChecksumUrl)
     }
     if ($ExpectedSha256) {
-        $InstallerArgs.Add("--sha256")
-        $InstallerArgs.Add($ExpectedSha256)
+        $InstallArguments.Add("--sha256")
+        $InstallArguments.Add($ExpectedSha256)
     }
-    $InstallerArgs.Add("--install-dir")
-    $InstallerArgs.Add($InstallDir)
-    $InstallerArgs.Add("--no-run")
-    $InstallerArgs.Add("--quiet")
+    $InstallArguments.Add("--install-dir")
+    $InstallArguments.Add($InstallDir)
+    $InstallArguments.Add("--no-run")
+    $InstallArguments.Add("--quiet")
 
-    $InstallerArgumentArray = $InstallerArgs.ToArray()
-    & $Installer @InstallerArgumentArray
+    $InstallArgumentArray = $InstallArguments.ToArray()
+    & $Installer @InstallArgumentArray
 
     $Binary = Join-Path $InstallDir "rewire.exe"
     if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
         throw "installer did not produce a rewire.exe binary"
     }
 
-    $RunArguments = if ($RewireArgs.Count -eq 0) { @("configure") } else { $RewireArgs.ToArray() }
+    [string[]]$RunArguments = if ($RewireArgs.Count -eq 0) { "configure" } else { $RewireArgs.ToArray() }
     & $Binary @RunArguments
     $ExitCode = $LASTEXITCODE
 } finally {

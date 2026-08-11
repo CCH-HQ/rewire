@@ -79,7 +79,7 @@ try {
     }
     $DefaultLines = @(Get-Content -LiteralPath (Join-Path $TemporaryDirectory "default-arguments"))
     if ($DefaultLines[1] -ne "argument=configure") {
-        throw "run.ps1 did not default to configure"
+        throw "run.ps1 did not default to configure; fixture output: $($DefaultLines -join ' | ')"
     }
 
     $Isolated = Join-Path $TemporaryDirectory "isolated"
