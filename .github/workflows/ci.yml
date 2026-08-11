@@ -8,6 +8,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      - 'scripts/**'
       - 'tests/fixtures/**'
       - '.github/workflows/ci.yml'
   pull_request:
@@ -17,6 +18,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      - 'scripts/**'
       - 'tests/fixtures/**'
       - '.github/workflows/ci.yml'
 
@@ -48,15 +50,21 @@ jobs:
           components: clippy, rustfmt
           targets: x86_64-pc-windows-gnu
 
-      # `ring` compiles C sources for the target, so rustup's standard library alone is insufficient.
-      - name: Install Windows GNU cross compiler
-        run: sudo apt-get update && sudo apt-get install --yes gcc-mingw-w64-x86-64
+      # `ring` needs the target C compiler; installer scripts are linted with the runner package.
+      - name: Install CI system tools
+        run: sudo apt-get update && sudo apt-get install --yes gcc-mingw-w64-x86-64 shellcheck
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Check Unix installer scripts
+        run: shellcheck scripts/install.sh scripts/tests/install-unix.sh
+
+      - name: Test Unix installer
+        run: sh scripts/tests/install-unix.sh
 
       - name: Run strict Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
@@ -66,3 +74,27 @@ jobs:
 
       - name: Check Windows GNU target
         run: cargo check --locked --target x86_64-pc-windows-gnu --all-targets
+
+  installer-windows:
+    name: Test Windows installer
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Windows fixture binary
+        run: cargo build --locked
+
+      - name: Test PowerShell installer
+        shell: pwsh
+        run: ./scripts/tests/install-windows.ps1 -BinaryPath target/debug/rewire.exe

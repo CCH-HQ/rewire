@@ -25,6 +25,7 @@ All notable changes to Rewire are documented here.
 
 ### Added
 
+- Checksum-verified Unix and Windows bootstrap installers with latest or pinned releases, configurable install directories, mirror roots, exact download/checksum URLs, explicit SHA-256 input, install-only mode, and lossless Rewire argument forwarding; added native installer smoke tests to CI.
 - Vendor-neutral `rewire` CLI with `--baseurl`, token input modes, client selection, client-aware required `--model` input, human-readable command output, opt-in stable JSON, environment/version-aware doctor, backup listing, transactional remove and rollback commands, generated shell completions, detailed build version output, and TTY-aware semantic colors for help, plans, statuses, and errors.
 - Inquire-based guided terminal workflow with detected-client multi-select, validated endpoint and ASCII-masked token prompts with visible cursor progress, numbered modification and conflict review, single-choice confirmation, edit/rebuild/cancel paths, semantic status colors, ASCII-safe control labels for legacy Windows code pages, monochrome mode, and a compatibility alias for the former `tui` command spelling.
 - Structured recipes for Claude Code, Codex, OpenCode, Hermes Agent, and OpenClaw with JSON/JSONC/JSON5, TOML, and YAML support.

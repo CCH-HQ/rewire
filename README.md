@@ -31,6 +31,50 @@ rewire completions zsh > ~/.zfunc/_rewire
 rewire configure --no-color
 ```
 
+## Install and run
+
+The bootstrap installers select the current OS and architecture, download the matching GitHub
+Release archive, verify it against `SHA256SUMS`, install the binary atomically, and then start the
+guided workflow. Download the script first so interactive `configure` keeps terminal stdin.
+
+Unix:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.sh \
+  -o /tmp/rewire-install.sh
+sh /tmp/rewire-install.sh
+```
+
+Windows PowerShell:
+
+```powershell
+$installer = Join-Path $env:TEMP "rewire-install.ps1"
+Invoke-WebRequest `
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.ps1 `
+  -OutFile $installer
+& $installer
+```
+
+Arguments after `--` are passed to Rewire instead of opening the default workflow:
+
+```bash
+sh /tmp/rewire-install.sh -- \
+  --baseurl https://api.example.com --client claude,codex --yes
+```
+
+Installers also accept a release mirror root or a platform-specific direct download. This supports
+commands embedded by a Sub2API frontend without hard-coding GitHub as the binary source:
+
+```bash
+sh /tmp/rewire-install.sh \
+  --download-url "$SIGNED_ARCHIVE_URL" --sha256 "$ARCHIVE_SHA256" -- \
+  --baseurl https://api.example.com --client opencode --model gpt-5.5 --yes
+```
+
+See [installation and embedding](docs/installation.md) for PowerShell equivalents, mirror URL
+behavior, environment variables, platform asset names, install-only mode, and checksum handling.
+
 `--token` is convenient but can be visible in shell history and process listings. Prefer `--token-stdin`, `REWIRE_TOKEN`, or the guided workflow (`rewire configure`). Complete tokens are excluded from plans, manifests, diagnostics, and the custom `Secret` debug representation.
 
 `--model` is required when OpenCode, Hermes, or OpenClaw is selected. It is the provider-native model ID, not a display label or a qualified client reference. `--sdk` selects the OpenCode provider protocol (`openai`, `anthropic`, `google`, or `openai-compatible`); common GPT, Claude, and Gemini IDs are inferred when it is omitted. A single OpenCode model reuses the native `openai` or `anthropic` provider where applicable; Google and compatible single-model selections use the isolated `rewire` provider. `--model-name` applies only to a custom OpenCode entry or to OpenClaw; a value supplied for an OpenCode native provider is reported and ignored. Hermes uses `model.default`, `model.provider`, and the keyed `providers.rewire` schema, while OpenClaw uses `agents.defaults.model.primary: "rewire/<id>"`. Claude and Codex retain their current model selection. See [client compatibility](docs/client-compatibility.md) for credential locations, source evidence, and known upstream documentation drift.
