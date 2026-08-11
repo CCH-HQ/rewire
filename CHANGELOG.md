@@ -6,6 +6,7 @@ All notable changes to Rewire are documented here.
 
 ### Changed
 
+- Moved the canonical repository from `AptS-1547/rewire` to the `CCH-HQ` organization and updated package and changelog URLs.
 - Updated direct Rust dependencies to the highest available releases, including Inquire 0.9, JSONC Parser 0.33, SHA-2 0.11, TOML Edit 0.25, and URL 2.5; refreshed `Cargo.lock`, verified the root dependency set with `cargo outdated`, and retained behavior through the full test matrix.
 - Adopted Rust edition 2024, pinned the Rust 1.94.0 minimal toolchain with Rustfmt and Clippy, and enabled the AsterForge strict lint baseline for pedantic diagnostics, justified suppressions, numeric casts, and unsafe-code hygiene.
 - Split the binary into dedicated CLI input/output layers, diagnostics, and per-command modules so doctor, plan, apply, remove, rollback, and backup share one rendering and error policy.
@@ -37,8 +38,12 @@ All notable changes to Rewire are documented here.
 - Provider and selected-model conflict review that treats matching values as idempotent and requires guided confirmation or `--yes` before replacing an existing endpoint or current model; model removal preserves later selections that no longer point to Rewire.
 - GitHub Actions quality gates for formatting, strict Clippy, the full test suite, and Windows GNU cross-compilation, plus tag releases for five native targets with checksums, Cosign OIDC signatures, SPDX SBOMs, and provenance attestations.
 
+### Fixed
+
+- Installed the MinGW cross compiler in CI so the Windows GNU quality gate can build native dependencies such as `ring` instead of failing after the Rust target is installed.
+
 ### Security
 
 - Tokens use zeroizing core and secure workflow password input, remain omitted from serialized plans/manifests, and are redacted from generated diffs, errors, and debug output.
 
-[Unreleased]: https://github.com/AptS-1547/rewire/commits/master
+[Unreleased]: https://github.com/CCH-HQ/rewire/commits/master

@@ -9,8 +9,8 @@ authors = [
     "AptS-1547 <apts-1547@esaps.net>",
     "AptS-1548 <apts-1548@esaps.net>",
 ]
-repository = "https://github.com/AptS-1547/rewire"
-homepage = "https://github.com/AptS-1547/rewire"
+repository = "https://github.com/CCH-HQ/rewire"
+homepage = "https://github.com/CCH-HQ/rewire"
 keywords = ["ai", "client", "configuration", "planner", "transaction", "engine"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"

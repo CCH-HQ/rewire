@@ -48,6 +48,10 @@ jobs:
           components: clippy, rustfmt
           targets: x86_64-pc-windows-gnu
 
+      # `ring` compiles C sources for the target, so rustup's standard library alone is insufficient.
+      - name: Install Windows GNU cross compiler
+        run: sudo apt-get update && sudo apt-get install --yes gcc-mingw-w64-x86-64
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
