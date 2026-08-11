@@ -138,7 +138,8 @@ jobs:
           sha256sum rewire-*.tar.gz rewire-*.zip > SHA256SUMS
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v4
+        # The installer publishes exact release tags; there is no moving v4 tag.
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign archives and checksums with GitHub OIDC
         shell: bash
