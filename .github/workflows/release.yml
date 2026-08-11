@@ -65,8 +65,9 @@ jobs:
         if: matrix.archive == 'tar'
         shell: bash
         run: |
-          mkdir -p dist/package
+          mkdir -p dist/package dist/sbom-root
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/package/rewire
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/sbom-root/rewire
           cp README.md CHANGELOG.md LICENSE dist/package/
           tar -C dist/package -czf "dist/rewire-${{ matrix.target }}.tar.gz" .
 
@@ -74,15 +75,16 @@ jobs:
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/package | Out-Null
+          New-Item -ItemType Directory -Force dist/package,dist/sbom-root | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/package/rewire.exe
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/sbom-root/rewire.exe
           Copy-Item README.md,CHANGELOG.md,LICENSE dist/package/
           Compress-Archive -Path dist/package/* -DestinationPath "dist/rewire-${{ matrix.target }}.zip"
 
       - name: Generate binary SBOM
         uses: anchore/sbom-action@v0
         with:
-          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          path: dist/sbom-root
           format: spdx-json
           output-file: dist/rewire-${{ matrix.target }}.spdx.json
           upload-artifact: false
