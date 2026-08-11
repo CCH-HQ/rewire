@@ -1,5 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# Capture native exit codes ourselves so PowerShell 7 preference changes do not preempt cleanup.
+$PSNativeCommandUseErrorActionPreference = $false
 
 $Repository = "CCH-HQ/rewire"
 $Release = if ($env:REWIRE_RELEASE) { $env:REWIRE_RELEASE } else { "latest" }
@@ -9,6 +11,7 @@ $DownloadUrl = $env:REWIRE_DOWNLOAD_URL
 $ChecksumUrl = $env:REWIRE_CHECKSUM_URL
 $ExpectedSha256 = $env:REWIRE_SHA256
 $RunAfterInstall = $true
+$Quiet = $false
 $RewireArgs = [System.Collections.Generic.List[string]]::new()
 $AssetBaseOptionSet = $false
 $DownloadOptionSet = $false
@@ -23,7 +26,7 @@ Usage:
   install.ps1 [INSTALLER OPTIONS] [--] [REWIRE ARGUMENTS...]
 
 Installer options:
-  --release <VERSION>       Release to install, for example 0.1.0 or v0.1.0
+  --release <VERSION>       Release to install, for example 0.0.1 or v0.0.1
                             (default: latest)
   --install-dir <DIR>       Destination directory
                             (default: `%LOCALAPPDATA%\Programs\rewire\bin)
@@ -32,6 +35,7 @@ Installer options:
   --checksum-url <URL>      Exact SHA256SUMS URL or local file
   --sha256 <DIGEST>         Expected archive SHA-256 instead of SHA256SUMS
   --no-run                  Install without starting Rewire
+  --quiet                   Suppress installation status and PATH notices
   -h, --help                Print this help
 
 With no Rewire arguments, the installer starts `rewire configure`. Otherwise,
@@ -93,6 +97,11 @@ arguments when an argument could be confused with an installer option.
         }
         "--no-run" {
             $RunAfterInstall = $false
+            $Index += 1
+            continue ParseArguments
+        }
+        "--quiet" {
+            $Quiet = $true
             $Index += 1
             continue ParseArguments
         }
@@ -273,10 +282,12 @@ try {
     Remove-Item -Recurse -Force -LiteralPath $TemporaryDirectory -ErrorAction SilentlyContinue
 }
 
-Write-Output "Installed rewire to $Destination"
-$PathEntries = @($env:PATH -split [IO.Path]::PathSeparator)
-if ($InstallDir -notin $PathEntries) {
-    Write-Warning "Add $InstallDir to PATH to run rewire directly."
+if (-not $Quiet) {
+    Write-Output "Installed rewire to $Destination"
+    $PathEntries = @($env:PATH -split [IO.Path]::PathSeparator)
+    if ($InstallDir -notin $PathEntries) {
+        Write-Warning "Add $InstallDir to PATH to run rewire directly."
+    }
 }
 
 if (-not $RunAfterInstall) {

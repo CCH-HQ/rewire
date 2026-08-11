@@ -1,42 +1,49 @@
-# Installation and embedding
+# Installation, one-time runs, and embedding
 
-Rewire ships separate POSIX shell and PowerShell bootstrap installers. Both installers:
+Rewire ships persistent installers and one-time runners for POSIX shell and PowerShell. All four
+entrypoints share the installer implementation for the platform-sensitive operations:
 
 1. detect the current platform and select its release archive;
 2. download the archive and checksum manifest;
 3. verify SHA-256 before changing the existing installation;
-4. extract and atomically replace the destination binary; and
+4. extract and atomically stage the destination binary; and
 5. run `rewire configure` by default, or pass supplied arguments to Rewire unchanged.
 
-The default Unix destination is `$HOME/.local/bin/rewire`. The default Windows destination is
+`install.sh` and `install.ps1` persist the binary. The default Unix destination is
+`$HOME/.local/bin/rewire`; the default Windows destination is
 `%LOCALAPPDATA%\Programs\rewire\bin\rewire.exe`. A destination outside `PATH` is allowed and
-reported after installation.
+reported after installation. `run.sh` and `run.ps1` instead use a private temporary directory and
+remove the binary after Rewire exits, including non-zero exits and bootstrap failures.
 
-## Installer options
+## Shared download options
 
-The two scripts expose the same options:
+Installers and runners accept the same release source and integrity options:
 
 | Option | Behavior |
 | --- | --- |
-| `--release <VERSION>` | Install `latest` or a specific version such as `0.1.0` or `v0.1.0` |
-| `--install-dir <DIR>` | Override the platform default destination directory |
+| `--release <VERSION>` | Use `latest` or a specific version such as `0.0.1` or `v0.0.1` |
 | `--asset-base-url <VALUE>` | Use a mirror URL or local directory containing all release assets |
 | `--download-url <URL>` | Use one exact platform-specific archive URL or local file |
 | `--checksum-url <URL>` | Use an exact `SHA256SUMS` URL or local file |
 | `--sha256 <DIGEST>` | Verify against a supplied archive digest instead of downloading `SHA256SUMS` |
-| `--no-run` | Install the binary without starting Rewire |
-| `--` | End installer options and pass every remaining argument to Rewire |
+| `--` | End bootstrap options and pass every remaining argument to Rewire |
 
-Equivalent environment variables are `REWIRE_RELEASE`, `REWIRE_INSTALL_DIR`,
-`REWIRE_ASSET_BASE_URL`, `REWIRE_DOWNLOAD_URL`, `REWIRE_CHECKSUM_URL`, and `REWIRE_SHA256`.
-Command-line options take precedence.
+Equivalent environment variables are `REWIRE_RELEASE`, `REWIRE_ASSET_BASE_URL`,
+`REWIRE_DOWNLOAD_URL`, `REWIRE_CHECKSUM_URL`, and `REWIRE_SHA256`. Command-line options take
+precedence.
 
 `--download-url` and `--asset-base-url` are mutually exclusive. `--sha256` and `--checksum-url`
 are also mutually exclusive. When an exact download URL is supplied without either checksum
 option, the installer requests `SHA256SUMS` beside that URL. Signed or routed download endpoints
 should pass `--sha256` or an explicit `--checksum-url` instead of relying on the sibling path.
 
-## Unix
+Persistent installers additionally accept `--install-dir <DIR>`, `--no-run`, and `--quiet`.
+`REWIRE_INSTALL_DIR` provides the default installation directory. One-time runners accept
+`--installer-url <URL>` or `REWIRE_INSTALLER_URL` when a sibling `install.sh` or `install.ps1` is
+not available or a trusted hosted installer should be selected explicitly. Runners reserve the
+temporary install directory internally, so installer-only options are rejected before download.
+
+## Unix persistent install
 
 Download before execution when the installer should open the interactive workflow. Piping the
 script directly into `sh` consumes terminal stdin, which makes an interactive prompt unavailable.
@@ -50,7 +57,7 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 sh /tmp/rewire-install.sh
 
 # Install a fixed release without running it.
-sh /tmp/rewire-install.sh --release 0.1.0 --install-dir "$HOME/bin" --no-run
+sh /tmp/rewire-install.sh --release 0.0.1 --install-dir "$HOME/bin" --no-run
 
 # Install and run a non-interactive configuration.
 printf '%s\n' "$REWIRE_TOKEN" | sh /tmp/rewire-install.sh -- \
@@ -60,7 +67,26 @@ printf '%s\n' "$REWIRE_TOKEN" | sh /tmp/rewire-install.sh -- \
   --yes
 ```
 
-## Windows PowerShell
+## Unix one-time run
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.sh \
+  -o /tmp/rewire-run.sh
+
+# Download, verify, open the workflow, and clean up after it exits.
+sh /tmp/rewire-run.sh
+
+# Run a fixed release without writing to $HOME/.local/bin.
+sh /tmp/rewire-run.sh --release 0.0.1 -- doctor
+
+# A standalone runner can obtain the installer from a trusted HTTPS location.
+sh /tmp/rewire-run.sh \
+  --installer-url https://downloads.example/rewire/install.sh \
+  --asset-base-url https://downloads.example/rewire/current -- doctor
+```
+
+## Windows PowerShell persistent install
 
 ```powershell
 $installer = Join-Path $env:TEMP "rewire-install.ps1"
@@ -72,7 +98,7 @@ Invoke-WebRequest `
 & $installer
 
 # Install only.
-& $installer --release 0.1.0 --install-dir "$HOME\bin" --no-run
+& $installer --release 0.0.1 --install-dir "$HOME\bin" --no-run
 
 # Install and configure through normal Rewire arguments.
 & $installer -- `
@@ -81,13 +107,29 @@ Invoke-WebRequest `
   --yes
 ```
 
+## Windows PowerShell one-time run
+
+```powershell
+$runner = Join-Path $env:TEMP "rewire-run.ps1"
+Invoke-WebRequest `
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.ps1 `
+  -OutFile $runner
+
+# Download, verify, open the workflow, and clean up after it exits.
+& $runner
+
+# Run a fixed release without writing to the user Programs directory.
+& $runner --release 0.0.1 -- doctor
+```
+
 ## Sub2API embedding
 
-A frontend can embed one platform-neutral mirror command when its download service exposes the
-release filenames unchanged. The installer appends the selected archive name and `SHA256SUMS`:
+A frontend can embed a one-time runner when configuration should not permanently install Rewire.
+When the download service exposes release filenames unchanged, the runner delegates to the
+installer, which appends the selected archive name and `SHA256SUMS`:
 
 ```bash
-sh /tmp/rewire-install.sh \
+sh /tmp/rewire-run.sh \
   --asset-base-url https://sub2api.example/rewire/releases/current -- \
   --baseurl https://api.example.com --client claude,codex --yes
 ```
@@ -95,14 +137,14 @@ sh /tmp/rewire-install.sh \
 For a backend-generated or expiring platform-specific URL, embed the exact archive URL and digest:
 
 ```bash
-sh /tmp/rewire-install.sh \
+sh /tmp/rewire-run.sh \
   --download-url "$SIGNED_ARCHIVE_URL" \
   --sha256 "$ARCHIVE_SHA256" -- \
   --baseurl https://api.example.com --client opencode --model gpt-5.5 --yes
 ```
 
 ```powershell
-& $installer `
+& $runner `
   --download-url $SignedArchiveUrl `
   --sha256 $ArchiveSha256 -- `
   --baseurl https://api.example.com `
@@ -113,6 +155,8 @@ sh /tmp/rewire-install.sh \
 
 The frontend should avoid embedding API tokens in a command string. Use the guided prompt,
 `REWIRE_TOKEN`, or `--token-stdin` so shell history and process listings do not retain credentials.
+Use the persistent installer instead only when leaving a reusable `rewire` command on the user's
+machine is the intended product behavior.
 
 ## Docker end-to-end verification
 

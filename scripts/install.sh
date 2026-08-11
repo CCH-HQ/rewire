@@ -10,6 +10,7 @@ download_url=${REWIRE_DOWNLOAD_URL:-}
 checksum_url=${REWIRE_CHECKSUM_URL:-}
 expected_sha256=${REWIRE_SHA256:-}
 run_after_install=1
+quiet=0
 asset_base_option_set=0
 download_option_set=0
 checksum_option_set=0
@@ -28,7 +29,7 @@ Usage:
   install.sh [INSTALLER OPTIONS] [--] [REWIRE ARGUMENTS...]
 
 Installer options:
-  --release <VERSION>       Release to install, for example 0.1.0 or v0.1.0
+  --release <VERSION>       Release to install, for example 0.0.1 or v0.0.1
                             (default: latest)
   --install-dir <DIR>       Destination directory (default: $HOME/.local/bin)
   --asset-base-url <VALUE>  Release asset URL or local fixture/mirror directory
@@ -36,6 +37,7 @@ Installer options:
   --checksum-url <URL>      Exact SHA256SUMS URL or local file
   --sha256 <DIGEST>         Expected archive SHA-256 instead of SHA256SUMS
   --no-run                  Install without starting Rewire
+  --quiet                   Suppress installation status and PATH notices
   -h, --help                Print this help
 
 With no Rewire arguments, the installer starts `rewire configure`. Otherwise,
@@ -100,6 +102,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-run)
             run_after_install=0
+            shift
+            ;;
+        --quiet)
+            quiet=1
             shift
             ;;
         -h | --help)
@@ -275,11 +281,13 @@ destination=$install_dir/rewire
 mv -f "$install_tmp" "$destination" || fail "could not install $destination"
 install_tmp=
 
-printf 'Installed rewire to %s\n' "$destination"
-case ":${PATH:-}:" in
-    *":$install_dir:"*) ;;
-    *) printf 'Note: add %s to PATH to run rewire directly.\n' "$install_dir" >&2 ;;
-esac
+if [ "$quiet" -eq 0 ]; then
+    printf 'Installed rewire to %s\n' "$destination"
+    case ":${PATH:-}:" in
+        *":$install_dir:"*) ;;
+        *) printf 'Note: add %s to PATH to run rewire directly.\n' "$install_dir" >&2 ;;
+    esac
+fi
 
 [ "$run_after_install" -eq 1 ] || exit 0
 

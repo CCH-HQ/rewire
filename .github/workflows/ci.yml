@@ -60,10 +60,12 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Check Unix installer scripts
+      - name: Check Unix bootstrap scripts
         run: |
           shellcheck scripts/install.sh \
+            scripts/run.sh \
             scripts/tests/install-unix.sh \
+            scripts/tests/run-unix.sh \
             scripts/tests/install-docker-e2e.sh \
             scripts/tests/client-runtime-e2e.sh \
             scripts/tests/runtime/*.sh
@@ -74,6 +76,9 @@ jobs:
 
       - name: Test Unix installer
         run: sh scripts/tests/install-unix.sh
+
+      - name: Test Unix run-only entrypoint
+        run: sh scripts/tests/run-unix.sh
 
       - name: Run strict Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
@@ -107,3 +112,7 @@ jobs:
       - name: Test PowerShell installer
         shell: pwsh
         run: ./scripts/tests/install-windows.ps1 -BinaryPath target/debug/rewire.exe
+
+      - name: Test PowerShell run-only entrypoint
+        shell: pwsh
+        run: ./scripts/tests/run-windows.ps1

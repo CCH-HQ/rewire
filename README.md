@@ -32,13 +32,14 @@ rewire completions zsh > ~/.zfunc/_rewire
 rewire configure --no-color
 ```
 
-## Install and run
+## Install permanently or run once
 
-The bootstrap installers select the current OS and architecture, download the matching GitHub
-Release archive, verify it against `SHA256SUMS`, install the binary atomically, and then start the
-guided workflow. Download the script first so interactive `configure` keeps terminal stdin.
+Both bootstrap paths select the current OS and architecture and verify the release archive against
+`SHA256SUMS`. Use `install` to keep Rewire in the normal user binary directory, or `run` to stage it
+in a private temporary directory for one invocation and remove it afterward. Download the script
+first so interactive `configure` keeps terminal stdin.
 
-Unix:
+Unix persistent install:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL \
@@ -47,7 +48,16 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 sh /tmp/rewire-install.sh
 ```
 
-Windows PowerShell:
+Unix one-time run:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.sh \
+  -o /tmp/rewire-run.sh
+sh /tmp/rewire-run.sh
+```
+
+Windows PowerShell persistent install:
 
 ```powershell
 $installer = Join-Path $env:TEMP "rewire-install.ps1"
@@ -57,24 +67,36 @@ Invoke-WebRequest `
 & $installer
 ```
 
-Arguments after `--` are passed to Rewire instead of opening the default workflow:
+Windows PowerShell one-time run:
+
+```powershell
+$runner = Join-Path $env:TEMP "rewire-run.ps1"
+Invoke-WebRequest `
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.ps1 `
+  -OutFile $runner
+& $runner
+```
+
+Arguments after `--` are passed to Rewire instead of opening the default workflow. The same
+release, mirror, direct-download, and checksum options are accepted by install and run entrypoints:
 
 ```bash
-sh /tmp/rewire-install.sh -- \
+sh /tmp/rewire-run.sh -- \
   --baseurl https://api.example.com --client claude,codex --yes
 ```
 
-Installers also accept a release mirror root or a platform-specific direct download. This supports
-commands embedded by a Sub2API frontend without hard-coding GitHub as the binary source:
+This supports commands embedded by a Sub2API frontend without permanently installing a binary or
+hard-coding GitHub as the binary source:
 
 ```bash
-sh /tmp/rewire-install.sh \
+sh /tmp/rewire-run.sh \
   --download-url "$SIGNED_ARCHIVE_URL" --sha256 "$ARCHIVE_SHA256" -- \
   --baseurl https://api.example.com --client opencode --model gpt-5.5 --yes
 ```
 
 See [installation and embedding](docs/installation.md) for PowerShell equivalents, mirror URL
-behavior, environment variables, platform asset names, install-only mode, and checksum handling.
+behavior, environment variables, platform asset names, persistent install mode, and cleanup
+guarantees for one-time runs.
 
 `--token` is convenient but can be visible in shell history and process listings. Prefer `--token-stdin`, `REWIRE_TOKEN`, or the guided workflow (`rewire configure`). Complete tokens are excluded from plans, manifests, diagnostics, and the custom `Secret` debug representation.
 

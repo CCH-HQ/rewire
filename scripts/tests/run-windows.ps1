@@ -1,0 +1,181 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$Runner = Join-Path $Root "scripts\run.ps1"
+$Installer = Join-Path $Root "scripts\install.ps1"
+$TemporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("rewire-runner-test-" + [guid]::NewGuid())
+$Assets = Join-Path $TemporaryDirectory "assets"
+$Package = Join-Path $TemporaryDirectory "package"
+$RunnerTemp = Join-Path $TemporaryDirectory "runner-temp"
+$PersistentInstall = Join-Path $TemporaryDirectory "must-not-be-used"
+
+New-Item -ItemType Directory -Path $Assets, $Package, $RunnerTemp | Out-Null
+try {
+    # Compile a test-only console fixture so argument and lifecycle checks stay out of Rust code.
+    $FixtureSource = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+
+public static class RewireFixture
+{
+    public static int Main(string[] args)
+    {
+        var output = Environment.GetEnvironmentVariable("REWIRE_TEST_OUTPUT");
+        if (String.IsNullOrEmpty(output))
+        {
+            return 90;
+        }
+
+        using (var writer = new StreamWriter(output, false))
+        {
+            writer.WriteLine("executable=" + Process.GetCurrentProcess().MainModule.FileName);
+            foreach (var argument in args)
+            {
+                writer.WriteLine("argument=" + argument);
+            }
+        }
+
+        if (args.Length >= 2 && args[0] == "--fixture-exit")
+        {
+            return Int32.Parse(args[1]);
+        }
+        return 0;
+    }
+}
+'@
+    $FixtureBinary = Join-Path $Package "rewire.exe"
+    Add-Type `
+        -TypeDefinition $FixtureSource `
+        -OutputAssembly $FixtureBinary `
+        -OutputType ConsoleApplication
+
+    $Asset = "rewire-x86_64-pc-windows-msvc.zip"
+    Compress-Archive -Path (Join-Path $Package "*") -DestinationPath (Join-Path $Assets $Asset)
+    $Digest = (Get-FileHash -LiteralPath (Join-Path $Assets $Asset) -Algorithm SHA256).Hash
+    Set-Content -LiteralPath (Join-Path $Assets "SHA256SUMS") -Value "$Digest  $Asset" -Encoding ascii
+
+    $Output = Join-Path $TemporaryDirectory "arguments"
+    $PreviousInstallDir = $env:REWIRE_INSTALL_DIR
+    $PreviousTestOutput = $env:REWIRE_TEST_OUTPUT
+    $PreviousTemp = $env:TEMP
+    try {
+        $env:REWIRE_INSTALL_DIR = $PersistentInstall
+        $env:REWIRE_TEST_OUTPUT = $Output
+        $env:TEMP = $RunnerTemp
+        & $Runner `
+            --download-url (Join-Path $Assets $Asset) `
+            --sha256 $Digest -- `
+            --baseurl "https://gateway.example/api path" `
+            --client "claude,codex" `
+            --dry-run
+        if ($LASTEXITCODE -ne 0) {
+            throw "run.ps1 returned $LASTEXITCODE"
+        }
+    } finally {
+        $env:REWIRE_INSTALL_DIR = $PreviousInstallDir
+        $env:REWIRE_TEST_OUTPUT = $PreviousTestOutput
+        $env:TEMP = $PreviousTemp
+    }
+
+    $Lines = @(Get-Content -LiteralPath $Output)
+    $Expected = @(
+        "argument=--baseurl",
+        "argument=https://gateway.example/api path",
+        "argument=--client",
+        "argument=claude,codex",
+        "argument=--dry-run"
+    )
+    if (($Lines[1..($Lines.Count - 1)] -join "`n") -ne ($Expected -join "`n")) {
+        throw "Rewire arguments were not preserved"
+    }
+    $Executable = $Lines[0].Substring("executable=".Length)
+    if (Test-Path -LiteralPath $Executable) {
+        throw "temporary Rewire executable survived the run"
+    }
+    if (Test-Path -LiteralPath $PersistentInstall) {
+        throw "REWIRE_INSTALL_DIR escaped the run-only boundary"
+    }
+    if (@(Get-ChildItem -LiteralPath $RunnerTemp -Filter "rewire-run-*" -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw "temporary runner directory survived a successful run"
+    }
+
+    $env:REWIRE_TEST_OUTPUT = Join-Path $TemporaryDirectory "default-arguments"
+    try {
+        & $Runner --asset-base-url $Assets
+        if ($LASTEXITCODE -ne 0) { throw "default run returned $LASTEXITCODE" }
+    } finally {
+        Remove-Item Env:REWIRE_TEST_OUTPUT -ErrorAction SilentlyContinue
+    }
+    $DefaultLines = @(Get-Content -LiteralPath (Join-Path $TemporaryDirectory "default-arguments"))
+    if ($DefaultLines[1] -ne "argument=configure") {
+        throw "run.ps1 did not default to configure"
+    }
+
+    $Isolated = Join-Path $TemporaryDirectory "isolated"
+    New-Item -ItemType Directory -Path $Isolated | Out-Null
+    $IsolatedRunner = Join-Path $Isolated "run.ps1"
+    Copy-Item -LiteralPath $Runner -Destination $IsolatedRunner
+    $env:REWIRE_TEST_OUTPUT = Join-Path $TemporaryDirectory "downloaded-installer-arguments"
+    try {
+        & $IsolatedRunner `
+            --installer-url $Installer `
+            --asset-base-url $Assets -- --from-standalone
+        if ($LASTEXITCODE -ne 0) { throw "standalone run returned $LASTEXITCODE" }
+    } finally {
+        Remove-Item Env:REWIRE_TEST_OUTPUT -ErrorAction SilentlyContinue
+    }
+    if ((Get-Content -LiteralPath (Join-Path $TemporaryDirectory "downloaded-installer-arguments")) -notcontains "argument=--from-standalone") {
+        throw "explicit installer source was not used"
+    }
+
+    $InstallDirRejected = $false
+    try {
+        & $Runner --install-dir $PersistentInstall
+    } catch {
+        $InstallDirRejected = $_.Exception.Message -match 'reserved by the run-only entrypoint'
+    }
+    if (-not $InstallDirRejected) {
+        throw "run-only entrypoint accepted --install-dir"
+    }
+
+    Set-Content `
+        -LiteralPath (Join-Path $Assets "SHA256SUMS") `
+        -Value "$('0' * 64)  $Asset" `
+        -Encoding ascii
+    $ChecksumOutput = Join-Path $TemporaryDirectory "checksum-arguments"
+    $env:REWIRE_TEST_OUTPUT = $ChecksumOutput
+    $ChecksumFailed = $false
+    try {
+        & $Runner --asset-base-url $Assets
+    } catch {
+        $ChecksumFailed = $_.Exception.Message -match 'checksum mismatch'
+    } finally {
+        Remove-Item Env:REWIRE_TEST_OUTPUT -ErrorAction SilentlyContinue
+    }
+    if (-not $ChecksumFailed -or (Test-Path -LiteralPath $ChecksumOutput)) {
+        throw "checksum failure started the fixture or unexpectedly succeeded"
+    }
+
+    Set-Content -LiteralPath (Join-Path $Assets "SHA256SUMS") -Value "$Digest  $Asset" -Encoding ascii
+    $env:REWIRE_TEST_OUTPUT = Join-Path $TemporaryDirectory "exit-arguments"
+    try {
+        & $Runner --asset-base-url $Assets -- --fixture-exit 23
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        Remove-Item Env:REWIRE_TEST_OUTPUT -ErrorAction SilentlyContinue
+    }
+    if ($ExitCode -ne 23) {
+        throw "runner returned $ExitCode instead of fixture exit code 23"
+    }
+    $ExitLine = (Get-Content -LiteralPath (Join-Path $TemporaryDirectory "exit-arguments"))[0]
+    $ExitExecutable = $ExitLine.Substring("executable=".Length)
+    if (Test-Path -LiteralPath $ExitExecutable) {
+        throw "temporary executable survived a failed run"
+    }
+
+    Write-Output "Windows run-only tests passed."
+} finally {
+    Remove-Item -Recurse -Force -LiteralPath $TemporaryDirectory -ErrorAction SilentlyContinue
+}
