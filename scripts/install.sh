@@ -262,8 +262,9 @@ binary_member=$(tar -tzf "$archive" | awk '
 ')
 [ -n "$binary_member" ] || fail "$asset must contain exactly one rewire binary"
 tar -xzf "$archive" -C "$extracted" "$binary_member" || fail "could not extract rewire"
-[ -f "$extracted/rewire" ] && [ ! -L "$extracted/rewire" ] \
-    || fail "$asset does not contain a regular rewire binary"
+if [ ! -f "$extracted/rewire" ] || [ -L "$extracted/rewire" ]; then
+    fail "$asset does not contain a regular rewire binary"
+fi
 
 mkdir -p "$install_dir" || fail "could not create $install_dir"
 install_tmp=$(mktemp "$install_dir/.rewire.XXXXXX") \
