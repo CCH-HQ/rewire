@@ -148,3 +148,6 @@ try {
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $TemporaryDirectory -ErrorAction SilentlyContinue
 }
+
+# The non-zero propagation case intentionally leaves LASTEXITCODE set to 23.
+exit 0
