@@ -12,10 +12,18 @@ pub fn merge_recipe(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<u8>>
     match recipe.format {
         Format::Json => merge_json(recipe, existing),
         Format::Yaml => {
-            let mut root = existing
-                .map(serde_yaml::from_slice)
-                .transpose()?
-                .unwrap_or(Value::Object(Map::new()));
+            let existing = existing.unwrap_or_default();
+            let mut root = if existing.is_empty() {
+                Value::Object(Map::new())
+            } else {
+                serde_yaml::from_slice(existing)?
+            };
+            let removals = matching_merge_removals(recipe, existing)?;
+            remove_value_fields(
+                root.as_object_mut()
+                    .ok_or_else(|| anyhow!("YAML configuration root is not an object"))?,
+                &removals,
+            )?;
             deep_merge(&mut root, &recipe.values);
             Ok(serde_yaml::to_string(&root)?.into_bytes())
         }
@@ -216,21 +224,32 @@ fn remove_toml_fields(
     Ok(())
 }
 
-fn remove_value_fields(target: &mut Map<String, Value>, patch: &Map<String, Value>) -> Result<()> {
+fn remove_value_fields(
+    target: &mut Map<String, Value>,
+    patch: &Map<String, Value>,
+) -> Result<bool> {
+    let mut removed = false;
     for (key, value) in patch {
         if let Some(nested) = value.as_object() {
             let Some(value) = target.get_mut(key) else {
                 continue;
             };
-            let object = value
-                .as_object_mut()
-                .ok_or_else(|| anyhow!("YAML removal parent {key} is not an object"))?;
-            remove_value_fields(object, nested)?;
+            let remove_empty_parent = {
+                let object = value
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow!("YAML removal parent {key} is not an object"))?;
+                let nested_removed = remove_value_fields(object, nested)?;
+                nested_removed && object.is_empty()
+            };
+            if remove_empty_parent {
+                target.remove(key);
+            }
+            removed |= remove_empty_parent;
         } else {
-            target.remove(key);
+            removed |= target.remove(key).is_some();
         }
     }
-    Ok(())
+    Ok(removed)
 }
 
 fn remove_dotenv_keys(recipe: &Recipe, existing: &[u8]) -> Result<Vec<u8>> {

@@ -82,7 +82,7 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
             "key_env: REWIRE_TOKEN",
             "transport: chat_completions",
             "provider: rewire",
-            "name: fixture-model",
+            "default: fixture-model",
         ],
     },
     FixtureCase {
@@ -94,8 +94,9 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         adapter: &[
             "api: https://fixture-gateway.example",
             "key_env: REWIRE_TOKEN",
+            "default_model: fixture-model",
             "provider: rewire",
-            "name: fixture-model",
+            "default: fixture-model",
         ],
     },
     FixtureCase {
@@ -116,7 +117,13 @@ pub(crate) const CLIENT_FIXTURES: &[FixtureCase] = &[
         client: "openclaw",
         fixture: "tests/fixtures/openclaw/openclaw-official-shaped.json",
         target: ".openclaw/openclaw.json",
-        preserved: &["existing-proxy", "~/workspace", "coder-model"],
+        preserved: &[
+            "existing-proxy",
+            "~/workspace",
+            "coder-model",
+            "claude-existing",
+            "anthropic-messages",
+        ],
         adapter: &[
             "rewire",
             "singleValue",

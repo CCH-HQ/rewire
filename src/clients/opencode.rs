@@ -1,6 +1,6 @@
 use super::{
     client_file_from_env, honor_client_environment, object, plain_recipe, provider_model_reference,
-    provider_recipe, removal_recipe, string, structured_recipe,
+    provider_recipe, removal_recipe, string, structured_recipe, versioned_root_url,
 };
 use crate::model::{
     Client, ConditionalRemoval, Format, ModelConfig, OpenCodeSdk, Recipe, RemovalPredicate,
@@ -71,12 +71,16 @@ fn catalog_provider_recipe(
                 ("npm", string(sdk.npm())),
                 (
                     "options",
-                    object([("baseURL", string(base_url)), ("apiKey", string(reference))]),
+                    object([
+                        ("baseURL", string(opencode_base_url(base_url, sdk))),
+                        ("apiKey", string(reference)),
+                    ]),
                 ),
                 ("models", Value::Object(models)),
             ]),
         );
-        endpoint_pointers.push(catalog_endpoint_pointer(sdk));
+        let endpoint_pointer = catalog_endpoint_pointer(sdk);
+        endpoint_pointers.push((endpoint_pointer, endpoint_pointer));
     }
     let selected_provider = catalog_provider_id(selected_sdk);
     let mut recipe = structured_recipe(
@@ -121,7 +125,10 @@ fn native_provider_recipe(
                     provider,
                     object([(
                         "options",
-                        object([("baseURL", string(base_url)), ("apiKey", string(reference))]),
+                        object([
+                            ("baseURL", string(opencode_base_url(base_url, sdk))),
+                            ("apiKey", string(reference)),
+                        ]),
                     )]),
                 )]),
             ),
@@ -156,7 +163,10 @@ fn custom_provider_recipe(
                         ("npm", string(sdk.npm())),
                         (
                             "options",
-                            object([("baseURL", string(base_url)), ("apiKey", string(reference))]),
+                            object([
+                                ("baseURL", string(opencode_base_url(base_url, sdk))),
+                                ("apiKey", string(reference)),
+                            ]),
                         ),
                         ("models", models(catalog, model, model_name)),
                     ]),
@@ -374,6 +384,16 @@ const fn catalog_endpoint_pointer(sdk: OpenCodeSdk) -> &'static str {
     }
 }
 
+fn opencode_base_url(base_url: &str, sdk: OpenCodeSdk) -> String {
+    // OpenCode passes `options.baseURL` directly to the selected AI SDK package. Their native
+    // endpoint roots include the protocol version, unlike Claude Code's origin-style setting.
+    let version = match sdk {
+        OpenCodeSdk::Google => "v1beta",
+        OpenCodeSdk::OpenAi | OpenCodeSdk::Anthropic | OpenCodeSdk::OpenAiCompatible => "v1",
+    };
+    versioned_root_url(base_url, version)
+}
+
 fn provider_pointer(provider_id: &str) -> &'static str {
     match provider_id {
         "rewire" => "/provider/rewire",
@@ -433,3 +453,7 @@ fn config_path(home: &Path) -> PathBuf {
         .find(|path| path.exists())
         .unwrap_or_else(|| directory.join("opencode.jsonc"))
 }
+
+#[cfg(test)]
+#[path = "opencode/tests.rs"]
+mod tests;

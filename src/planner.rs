@@ -64,15 +64,20 @@ pub fn build_plan_with_catalog(home: &Path, input: &Input, models: &[ModelConfig
         .any(Client::requires_model)
         .then_some(input.model.as_deref())
         .flatten();
-    let opencode_sdk = input.clients.contains(&Client::OpenCode).then(|| {
+    let selected_sdk = model.map(|selected| {
         models
             .iter()
-            .find(|candidate| Some(candidate.id.as_str()) == model)
+            .find(|candidate| candidate.id == selected)
             .map_or_else(
                 || input.sdk.unwrap_or_else(|| OpenCodeSdk::infer(model)),
                 |model| model.sdk,
             )
     });
+    let opencode_sdk = input
+        .clients
+        .contains(&Client::OpenCode)
+        .then_some(selected_sdk)
+        .flatten();
     let sdk = opencode_sdk.map(|sdk| sdk.npm().to_owned());
     let model_name = (input.clients.contains(&Client::OpenClaw)
         || (input.clients.contains(&Client::OpenCode) && !models.is_empty())
@@ -98,7 +103,7 @@ pub fn build_plan_with_catalog(home: &Path, input: &Input, models: &[ModelConfig
             ModelCatalogOptions {
                 selected: model,
                 display_name: model_name.as_deref(),
-                sdk: opencode_sdk,
+                sdk: selected_sdk,
                 models,
             },
         ) {
@@ -244,13 +249,17 @@ fn recipe_conflicts(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<Conf
         return Ok(Vec::new());
     };
     let mut conflicts = Vec::new();
-    for &pointer in &recipe.provider_endpoints {
-        let Some(current) = root.pointer(pointer) else {
+    for &(existing_pointer, requested_pointer) in &recipe.provider_endpoints {
+        // A canonical field wins over a stale alias that the merge will remove.
+        if existing_pointer != requested_pointer && root.pointer(requested_pointer).is_some() {
+            continue;
+        }
+        let Some(current) = root.pointer(existing_pointer) else {
             continue;
         };
         let requested = recipe
             .values
-            .pointer(pointer)
+            .pointer(requested_pointer)
             .and_then(Value::as_str)
             .expect("provider endpoint recipes contain a string URL");
         let same_endpoint = current
@@ -258,7 +267,7 @@ fn recipe_conflicts(recipe: &Recipe, existing: Option<&[u8]>) -> Result<Vec<Conf
             .and_then(|value| validate_base_url(value).ok())
             .is_some_and(|value| value == requested);
         if !same_endpoint {
-            let provider = pointer.split('/').nth(2).unwrap_or("configured");
+            let provider = existing_pointer.split('/').nth(2).unwrap_or("configured");
             conflicts.push(review_conflict(
                 recipe,
                 format!(

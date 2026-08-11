@@ -33,7 +33,13 @@ rewire configure --no-color
 
 `--token` is convenient but can be visible in shell history and process listings. Prefer `--token-stdin`, `REWIRE_TOKEN`, or the guided workflow (`rewire configure`). Complete tokens are excluded from plans, manifests, diagnostics, and the custom `Secret` debug representation.
 
-`--model` is required when OpenCode, Hermes, or OpenClaw is selected. It is the provider-native model ID, not a display label or a qualified client reference. `--sdk` selects the OpenCode provider protocol (`openai`, `anthropic`, `google`, or `openai-compatible`); common GPT, Claude, and Gemini IDs are inferred when it is omitted. A single OpenCode model reuses the native `openai` or `anthropic` provider where applicable; Google and compatible single-model selections use the isolated `rewire` provider. `--model-name` applies only to a custom OpenCode entry or to OpenClaw; a value supplied for an OpenCode native provider is reported and ignored. Hermes uses `model: { provider: rewire, name: <id> }`, while OpenClaw uses `agents.defaults.model.primary: "rewire/<id>"`. Claude and Codex retain their current model selection. See [client compatibility](docs/client-compatibility.md) for credential locations, source evidence, and known upstream documentation drift.
+`--model` is required when OpenCode, Hermes, or OpenClaw is selected. It is the provider-native model ID, not a display label or a qualified client reference. `--sdk` selects the OpenCode provider protocol (`openai`, `anthropic`, `google`, or `openai-compatible`); common GPT, Claude, and Gemini IDs are inferred when it is omitted. A single OpenCode model reuses the native `openai` or `anthropic` provider where applicable; Google and compatible single-model selections use the isolated `rewire` provider. `--model-name` applies only to a custom OpenCode entry or to OpenClaw; a value supplied for an OpenCode native provider is reported and ignored. Hermes uses `model.default`, `model.provider`, and the keyed `providers.rewire` schema, while OpenClaw uses `agents.defaults.model.primary: "rewire/<id>"`. Claude and Codex retain their current model selection. See [client compatibility](docs/client-compatibility.md) for credential locations, source evidence, and known upstream documentation drift.
+
+For a bare gateway origin, adapters write the protocol request root their client actually consumes:
+Codex and OpenAI-compatible routes use `/v1`, Google routes use `/v1beta`, and Claude/Anthropic
+origin-style routes let the client append `/v1/messages`. OpenClaw Add all catalogs keep this on
+each model through its own `api` and `baseUrl` instead of treating GPT, Claude, Gemini, and generic
+compatible models as one OpenAI Completions protocol. Explicit routing paths are preserved.
 
 Running `rewire` without arguments opens the workflow only when both standard input and standard output are terminals. Pipes and automation fail fast with the missing CLI input instead of waiting for prompts; `--non-interactive` makes that intent explicit. The previous `rewire tui` spelling remains an alias for `rewire configure`.
 
@@ -52,9 +58,12 @@ compatible with legacy Windows code pages; each successful remote result is show
 green `AVAILABLE` marker. Transient transport/read failures, timeouts, HTTP 429, and HTTP 5xx are
 retried per API up to three total attempts with short exponential backoff; authentication, routing,
 redirect, response-limit, and schema failures are reported immediately. A failed protocol is a
-warning rather than a workflow stop, and `--debug` includes its final attempt count. The first
-picker view stays compact with `Add all N available models`, discovered models, `Show all catalog
-models`, and `Custom model ID`. Choosing `Add all` publishes every successfully discovered model
+warning rather than a workflow stop, and `--debug` includes its final attempt count. The explicit
+endpoint stays first; after HTTP 404/405 on a known Anthropic-compatible routing suffix
+such as `/api/claudecode`, discovery also tries the protocol-standard endpoint outside that suffix.
+The first picker view stays compact with `Add all N available models`, discovered models,
+`Show all catalog models`, and `Custom model ID`. Choosing `Add all` publishes every successfully
+discovered model
 to OpenCode, OpenClaw, and Hermes, then opens a second picker for the primary/default model; the
 catalog and default are reviewed together before one confirmation. Choosing a single discovered or
 catalog model keeps the existing one-model path. The reviewed local catalog is expanded only after

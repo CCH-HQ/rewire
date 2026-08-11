@@ -1,6 +1,6 @@
 use rewire::{
     DiscoveryOptions, ModelApi, discover_models_with_options, models_endpoint,
-    parse_models_response,
+    models_endpoint_candidates, parse_models_response,
 };
 use std::fmt::Write as _;
 use std::io::{Read, Write as _};
@@ -60,6 +60,74 @@ fn models_endpoint_preserves_existing_gateway_path() {
         models_endpoint("https://gateway.example/v1/models", ModelApi::OpenAi).unwrap(),
         "https://gateway.example/v1/models"
     );
+}
+
+#[test]
+fn models_endpoint_candidates_keep_explicit_path_before_compatible_fallback() {
+    assert_eq!(
+        models_endpoint_candidates("https://gateway.example/api/claudecode", ModelApi::OpenAi,)
+            .unwrap(),
+        vec![
+            "https://gateway.example/api/claudecode/models",
+            "https://gateway.example/v1/models",
+        ]
+    );
+    assert_eq!(
+        models_endpoint_candidates("https://gateway.example/apps/anthropic/", ModelApi::Google,)
+            .unwrap(),
+        vec![
+            "https://gateway.example/apps/anthropic/models",
+            "https://gateway.example/v1beta/models",
+        ]
+    );
+    assert_eq!(
+        models_endpoint_candidates("https://gateway.example/custom/v1", ModelApi::OpenAi).unwrap(),
+        vec!["https://gateway.example/custom/v1/models"]
+    );
+    assert_eq!(
+        models_endpoint_candidates(
+            "https://gateway.example/team/api/claudecode",
+            ModelApi::OpenAi,
+        )
+        .unwrap(),
+        vec![
+            "https://gateway.example/team/api/claudecode/models",
+            "https://gateway.example/team/v1/models",
+        ]
+    );
+}
+
+#[test]
+fn discovery_falls_back_from_compatible_request_prefix_on_not_found() {
+    let (base_url, server) = start_server_requests(6, |request| {
+        let request = request.to_ascii_lowercase();
+        if request.starts_with("get /api/claudecode/models ") {
+            return response(404, "missing");
+        }
+        if request.contains("authorization: bearer test-token") {
+            assert!(request.starts_with("get /v1/models http/1.1"));
+            response(200, r#"{"data":[{"id":"fallback-openai"}]}"#)
+        } else if request.contains("x-api-key: test-token") {
+            assert!(request.starts_with("get /v1/models http/1.1"));
+            response(200, r#"{"data":[{"id":"fallback-anthropic"}]}"#)
+        } else {
+            assert!(request.starts_with("get /v1beta/models http/1.1"));
+            response(200, r#"{"models":[{"name":"models/fallback-google"}]}"#)
+        }
+    });
+    let report = discover_models_with_options(
+        &format!("{base_url}/api/claudecode"),
+        "test-token",
+        test_options(Duration::from_secs(1), 1024),
+    );
+    server.join().unwrap();
+
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.successful_api_count(), 3);
+    assert_eq!(report.models.len(), 3);
+    assert!(report.diagnostics.iter().all(|diagnostic| {
+        diagnostic.attempts == 2 && !diagnostic.endpoint.contains("claudecode")
+    }));
 }
 
 #[test]

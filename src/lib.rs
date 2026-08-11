@@ -31,7 +31,7 @@ pub use model_catalog::{ModelPreset, POPULAR_MODELS, find_model, popular_models}
 pub use model_discovery::{
     DiscoveredModel, DiscoveryDiagnostic, DiscoveryFailure, DiscoveryOptions, DiscoveryReport,
     ModelApi, discover_models, discover_models_with_options, models_endpoint,
-    parse_models_response,
+    models_endpoint_candidates, parse_models_response,
 };
 pub use planner::{build_plan, build_plan_with_catalog, build_remove_plan, detect_clients};
 pub use security::validate_base_url;

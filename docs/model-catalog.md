@@ -115,7 +115,9 @@ uses the entered token only for the request, never stores response bodies, caps 
 1 MiB, and times out each protocol independently. Each API retries transient request/read failures,
 timeouts, HTTP 429, and HTTP 5xx up to three total attempts with short exponential backoff. Other
 HTTP statuses, redirects, oversized responses, malformed JSON, and incompatible schemas fail on the
-first attempt. Debug diagnostics report the final attempt count without response bodies or secrets.
+first attempt. A 404/405 on a known Anthropic-compatible routing suffix tries a suffix-stripped
+protocol candidate while leaving the supplied path first. Debug diagnostics report the final
+endpoint and total attempt count without response bodies or secrets.
 
 For OpenCode, each Add all entry retains its SDK family and is written to one of four protocol
 providers: `rewire-oairesp`, `rewire-anthropic`, `rewire-google`, or `rewire-oaicomp`. The primary

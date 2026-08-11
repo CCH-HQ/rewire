@@ -337,7 +337,14 @@ fn hermes_and_openclaw_recipes_follow_current_official_provider_shapes() {
         "coder-model"
     );
     assert_eq!(hermes.pointer("/model/provider").unwrap(), "rewire");
-    assert_eq!(hermes.pointer("/model/name").unwrap(), "coder-model");
+    assert_eq!(hermes.pointer("/model/default").unwrap(), "coder-model");
+    assert_eq!(hermes.pointer("/model/base_url").unwrap(), endpoint);
+    assert!(
+        hermes
+            .pointer("/providers/rewire/models/coder-model")
+            .unwrap()
+            .is_object()
+    );
     assert_eq!(hermes_recipes[1].path, home.join(".hermes/.env"));
 
     let openclaw_recipes = Client::OpenClaw.recipes(home, endpoint, "TOKEN", Some("coder-model"));
@@ -365,6 +372,18 @@ fn hermes_and_openclaw_recipes_follow_current_official_provider_shapes() {
         "coder-model"
     );
     assert_eq!(
+        openclaw
+            .pointer("/models/providers/rewire/models/0/api")
+            .unwrap(),
+        "openai-completions"
+    );
+    assert_eq!(
+        openclaw
+            .pointer("/models/providers/rewire/models/0/baseUrl")
+            .unwrap(),
+        endpoint
+    );
+    assert_eq!(
         openclaw.pointer("/agents/defaults/model/primary").unwrap(),
         "rewire/coder-model"
     );
@@ -373,6 +392,163 @@ fn hermes_and_openclaw_recipes_follow_current_official_provider_shapes() {
         home.join(".openclaw/secrets/rewire-token")
     );
     assert!(openclaw.pointer("/providers/rewire").is_none());
+}
+
+#[test]
+fn hermes_legacy_aliases_migrate_without_losing_operator_fields() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".hermes/config.yaml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r"model:
+  provider: rewire
+  name: coder-model
+  context_length: 131072
+providers:
+  rewire:
+    name: Rewire
+    base_url: https://gateway.example/v1
+    key_env: REWIRE_TOKEN
+    api_mode: chat_completions
+    model: coder-model
+    models:
+      - coder-model
+      - stale-model
+    request_timeout_seconds: 45
+  operator:
+    name: Operator
+    base_url: https://operator.example/v1
+    key_env: OPERATOR_TOKEN
+features:
+  audit: true
+",
+    )
+    .unwrap();
+    let input = Input {
+        base_url: "https://gateway.example/v1".into(),
+        token: Secret::new("secret").unwrap(),
+        clients: vec![Client::Hermes],
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
+    };
+
+    let migration = build_plan(dir.path(), &input).unwrap();
+    assert!(migration.conflicts.is_empty());
+    apply_plan(dir.path(), &migration).unwrap();
+    let migrated: Value = serde_yaml::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(migrated["model"]["default"], "coder-model");
+    assert_eq!(migrated["model"]["provider"], "rewire");
+    assert_eq!(migrated["model"]["context_length"], 131_072);
+    assert!(migrated["model"].get("name").is_none());
+    assert_eq!(
+        migrated["providers"]["rewire"]["api"],
+        "https://gateway.example/v1"
+    );
+    assert_eq!(
+        migrated["providers"]["rewire"]["transport"],
+        "chat_completions"
+    );
+    assert_eq!(
+        migrated["providers"]["rewire"]["default_model"],
+        "coder-model"
+    );
+    assert_eq!(
+        migrated["providers"]["rewire"]["request_timeout_seconds"],
+        45
+    );
+    assert!(migrated["providers"]["rewire"].get("base_url").is_none());
+    assert!(migrated["providers"]["rewire"].get("api_mode").is_none());
+    assert!(migrated["providers"]["rewire"].get("model").is_none());
+    assert_eq!(
+        migrated["providers"]["rewire"]["models"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        vec!["coder-model"]
+    );
+    assert!(migrated["providers"].get("operator").is_some());
+    assert_eq!(migrated["features"]["audit"], true);
+
+    let repeated = build_plan(dir.path(), &input).unwrap();
+    assert!(
+        repeated
+            .changes
+            .iter()
+            .all(|change| matches!(change.action, Action::Noop))
+    );
+
+    apply_plan(
+        dir.path(),
+        &build_remove_plan(dir.path(), &[Client::Hermes]).unwrap(),
+    )
+    .unwrap();
+    let removed: Value = serde_yaml::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(removed["model"]["context_length"], 131_072);
+    assert!(removed["model"].get("default").is_none());
+    assert!(removed["model"].get("provider").is_none());
+    assert!(removed["model"].get("base_url").is_none());
+    assert!(removed["providers"].get("rewire").is_none());
+    assert!(removed["providers"].get("operator").is_some());
+    assert_eq!(removed["features"]["audit"], true);
+}
+
+#[test]
+fn hermes_alias_endpoint_replacement_still_requires_review() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".hermes/config.yaml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        "providers:\n  rewire:\n    base_url: https://old.example/v1\n    key_env: REWIRE_TOKEN\n",
+    )
+    .unwrap();
+    let input = Input {
+        base_url: "https://new.example/v1".into(),
+        token: Secret::new("secret").unwrap(),
+        clients: vec![Client::Hermes],
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
+    };
+
+    let plan = build_plan(dir.path(), &input).unwrap();
+    assert_eq!(plan.conflicts.len(), 1);
+    assert!(!plan.conflicts[0].blocking);
+    assert!(plan.conflicts[0].reason.contains("different base URL"));
+}
+
+#[test]
+fn hermes_canonical_endpoint_wins_over_a_stale_alias() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".hermes/config.yaml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        "providers:\n  rewire:\n    api: https://current.example/v1\n    base_url: https://stale.example/v1\n    key_env: REWIRE_TOKEN\n",
+    )
+    .unwrap();
+    let input = Input {
+        base_url: "https://current.example/v1".into(),
+        token: Secret::new("secret").unwrap(),
+        clients: vec![Client::Hermes],
+        model: Some("coder-model".into()),
+        model_name: None,
+        sdk: None,
+    };
+
+    let plan = build_plan(dir.path(), &input).unwrap();
+    assert!(plan.conflicts.is_empty());
+    apply_plan(dir.path(), &plan).unwrap();
+    let migrated: Value =
+        serde_yaml::from_slice(&fs::read(dir.path().join(".hermes/config.yaml")).unwrap()).unwrap();
+    assert_eq!(
+        migrated["providers"]["rewire"]["api"],
+        "https://current.example/v1"
+    );
+    assert!(migrated["providers"]["rewire"].get("base_url").is_none());
 }
 
 #[test]
@@ -401,7 +577,7 @@ fn discovered_catalog_is_written_for_opencode_hermes_and_openclaw() {
         },
     ];
     let input = Input {
-        base_url: "https://gateway.example/v1".into(),
+        base_url: "https://gateway.example".into(),
         token: Secret::new("catalog-secret").unwrap(),
         clients: vec![Client::OpenCode, Client::Hermes, Client::OpenClaw],
         model: Some("claude-sonnet-5".into()),
@@ -417,6 +593,19 @@ fn discovered_catalog_is_written_for_opencode_hermes_and_openclaw() {
         &fs::read(dir.path().join(".config/opencode/opencode.jsonc")).unwrap(),
     )
     .unwrap();
+    assert_opencode_catalog(&opencode);
+
+    let hermes: Value =
+        serde_yaml::from_slice(&fs::read(dir.path().join(".hermes/config.yaml")).unwrap()).unwrap();
+    assert_hermes_catalog(&hermes);
+
+    let openclaw: Value =
+        serde_json::from_slice(&fs::read(dir.path().join(".openclaw/openclaw.json")).unwrap())
+            .unwrap();
+    assert_openclaw_catalog(&openclaw);
+}
+
+fn assert_opencode_catalog(opencode: &Value) {
     assert_eq!(opencode["model"], "rewire-anthropic/claude-sonnet-5");
     assert!(opencode["provider"].get("rewire").is_none());
     assert_eq!(
@@ -449,21 +638,36 @@ fn discovered_catalog_is_written_for_opencode_hermes_and_openclaw() {
             1
         );
     }
+    assert_eq!(
+        opencode["provider"]["rewire-oairesp"]["options"]["baseURL"],
+        "https://gateway.example/v1"
+    );
+    assert_eq!(
+        opencode["provider"]["rewire-anthropic"]["options"]["baseURL"],
+        "https://gateway.example/v1"
+    );
+    assert_eq!(
+        opencode["provider"]["rewire-google"]["options"]["baseURL"],
+        "https://gateway.example/v1beta"
+    );
+    assert_eq!(
+        opencode["provider"]["rewire-oaicomp"]["options"]["baseURL"],
+        "https://gateway.example/v1"
+    );
+}
 
-    let hermes: Value =
-        serde_yaml::from_slice(&fs::read(dir.path().join(".hermes/config.yaml")).unwrap()).unwrap();
-    assert_eq!(hermes["model"]["name"], "claude-sonnet-5");
+fn assert_hermes_catalog(hermes: &Value) {
+    assert_eq!(hermes["model"]["default"], "claude-sonnet-5");
     assert_eq!(
         hermes["providers"]["rewire"]["models"]
-            .as_array()
+            .as_object()
             .unwrap()
             .len(),
         4
     );
+}
 
-    let openclaw: Value =
-        serde_json::from_slice(&fs::read(dir.path().join(".openclaw/openclaw.json")).unwrap())
-            .unwrap();
+fn assert_openclaw_catalog(openclaw: &Value) {
     assert_eq!(
         openclaw["agents"]["defaults"]["model"]["primary"],
         "rewire/claude-sonnet-5"
@@ -474,6 +678,41 @@ fn discovered_catalog_is_written_for_opencode_hermes_and_openclaw() {
             .unwrap()
             .len(),
         4
+    );
+    let openclaw_models = openclaw["models"]["providers"]["rewire"]["models"]
+        .as_array()
+        .unwrap();
+    let openclaw_model = |id: &str| {
+        openclaw_models
+            .iter()
+            .find(|model| model["id"] == id)
+            .unwrap()
+    };
+    assert_eq!(openclaw_model("gpt-5.5")["api"], "openai-responses");
+    assert_eq!(
+        openclaw_model("gpt-5.5")["baseUrl"],
+        "https://gateway.example/v1"
+    );
+    assert_eq!(
+        openclaw_model("claude-sonnet-5")["api"],
+        "anthropic-messages"
+    );
+    assert_eq!(
+        openclaw_model("claude-sonnet-5")["baseUrl"],
+        "https://gateway.example"
+    );
+    assert_eq!(
+        openclaw_model("gemini-3-pro")["api"],
+        "google-generative-ai"
+    );
+    assert_eq!(
+        openclaw_model("gemini-3-pro")["baseUrl"],
+        "https://gateway.example/v1beta"
+    );
+    assert_eq!(openclaw_model("custom-model")["api"], "openai-completions");
+    assert_eq!(
+        openclaw_model("custom-model")["baseUrl"],
+        "https://gateway.example/v1"
     );
 }
 

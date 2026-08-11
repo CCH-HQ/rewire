@@ -10,6 +10,17 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 const DEFAULT_MAX_ATTEMPTS: usize = 3;
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
+const KNOWN_COMPAT_SUFFIXES: [&str; 9] = [
+    "/api/claudecode",
+    "/api/anthropic",
+    "/apps/anthropic",
+    "/api/coding",
+    "/claudecode",
+    "/anthropic",
+    "/step_plan",
+    "/coding",
+    "/claude",
+];
 
 /// A wire protocol attempted against the compatible gateway's Models endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -175,6 +186,51 @@ pub fn models_endpoint(base_url: &str, api: ModelApi) -> anyhow::Result<String> 
     Ok(url.into())
 }
 
+/// Build ordered Models endpoint candidates for gateway URLs with compatibility subpaths.
+///
+/// The explicit path remains first. When it ends in a known Anthropic-compatible routing suffix,
+/// a suffix-stripped protocol endpoint is added as a fallback for gateways that expose model
+/// discovery outside their request-routing prefix.
+///
+/// # Errors
+///
+/// Returns an error under the same conditions as [`models_endpoint`].
+pub fn models_endpoint_candidates(base_url: &str, api: ModelApi) -> anyhow::Result<Vec<String>> {
+    let normalized = validate_base_url(base_url)?;
+    let mut candidates = vec![models_endpoint(&normalized, api)?];
+    let mut url = url::Url::parse(&normalized)?;
+    let path = url.path().trim_end_matches('/').to_owned();
+    if let Some(suffix) = KNOWN_COMPAT_SUFFIXES
+        .iter()
+        .find(|suffix| path.ends_with(**suffix))
+    {
+        let stripped = &path[..path.len() - suffix.len()];
+        url.set_path(if stripped.is_empty() { "/" } else { stripped });
+        let fallback = protocol_models_endpoint(url, api)?;
+        if !candidates.contains(&fallback) {
+            candidates.push(fallback);
+        }
+    }
+    Ok(candidates)
+}
+
+fn protocol_models_endpoint(mut url: url::Url, api: ModelApi) -> anyhow::Result<String> {
+    let has_version = url
+        .path_segments()
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+        == Some(api.root_version());
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|()| anyhow::anyhow!("compatible base URL cannot accept path segments"))?;
+    segments.pop_if_empty();
+    if !has_version {
+        segments.push(api.root_version());
+    }
+    segments.push("models");
+    drop(segments);
+    Ok(url.into())
+}
+
 /// Probe `OpenAI`, `Anthropic`, and `Google` response shapes in parallel.
 ///
 /// Every protocol is isolated: one failed request becomes a warning in the returned report and
@@ -195,15 +251,15 @@ pub fn discover_models_with_options(
     let results = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(API_COUNT);
         for api in ModelApi::all() {
-            let Ok(endpoint) = models_endpoint(base_url, api) else {
+            let Ok(endpoints) = models_endpoint_candidates(base_url, api) else {
                 handles.push((api, None, None));
                 continue;
             };
-            let worker_endpoint = endpoint.clone();
+            let diagnostic_endpoint = endpoints[0].clone();
             handles.push((
                 api,
-                Some(endpoint),
-                Some(scope.spawn(move || request_models(api, &worker_endpoint, token, options))),
+                Some(diagnostic_endpoint),
+                Some(scope.spawn(move || request_models(api, &endpoints, token, options))),
             ));
         }
         handles
@@ -233,7 +289,7 @@ pub fn discover_models_with_options(
 
 fn request_models(
     api: ModelApi,
-    endpoint: &str,
+    endpoints: &[String],
     token: &str,
     options: DiscoveryOptions,
 ) -> (Result<Vec<RemoteModel>, String>, DiscoveryDiagnostic) {
@@ -245,10 +301,35 @@ fn request_models(
         .http_status_as_error(false)
         .build()
         .into();
+    let mut preceding_attempts = 0;
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let (result, mut diagnostic) =
+            request_models_at_endpoint(api, endpoint, token, options, &agent);
+        diagnostic.attempts += preceding_attempts;
+        if result
+            .as_ref()
+            .is_err_and(|reason| matches!(reason.as_str(), "HTTP 404" | "HTTP 405"))
+            && index + 1 < endpoints.len()
+        {
+            preceding_attempts = diagnostic.attempts;
+            continue;
+        }
+        return (result, diagnostic);
+    }
+    unreachable!("endpoint candidate lists always contain a primary endpoint")
+}
+
+fn request_models_at_endpoint(
+    api: ModelApi,
+    endpoint: &str,
+    token: &str,
+    options: DiscoveryOptions,
+    agent: &Agent,
+) -> (Result<Vec<RemoteModel>, String>, DiscoveryDiagnostic) {
     let max_attempts = options.max_attempts.max(1);
     let mut backoff = options.initial_backoff;
     for attempt in 1..=max_attempts {
-        let (result, mut diagnostic) = request_models_once(api, endpoint, token, options, &agent);
+        let (result, mut diagnostic) = request_models_once(api, endpoint, token, options, agent);
         diagnostic.attempts = attempt;
         match result {
             Ok(models) => return (Ok(models), diagnostic),

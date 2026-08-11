@@ -286,8 +286,8 @@ pub struct Recipe {
     pub values: Value,
     /// Marks files that contain a credential and therefore require private permissions.
     pub sensitive: bool,
-    /// JSON pointers for adapter-owned provider endpoints defined by this recipe.
-    pub(crate) provider_endpoints: Vec<&'static str>,
+    /// Existing/requested JSON pointer pairs for adapter-owned provider endpoints.
+    pub(crate) provider_endpoints: Vec<(&'static str, &'static str)>,
     /// JSON pointer for the client-native selected model written by this recipe.
     pub(crate) selected_model: Option<&'static str>,
     /// Selection fields removed only while they still refer to the Rewire provider.

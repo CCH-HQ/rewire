@@ -1,6 +1,7 @@
 model:
   provider: existing
-  name: coder-model
+  default: coder-model
+  base_url: https://existing-gateway.example/v1
 providers:
   existing:
     name: Existing compatible provider
@@ -8,6 +9,8 @@ providers:
     key_env: EXISTING_TOKEN
     transport: chat_completions
     default_model: coder-model
+    models:
+      coder-model: {}
 terminal:
   backend: local
   persistent_shell: false
