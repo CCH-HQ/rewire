@@ -18,9 +18,35 @@ $DownloadOptionSet = $false
 $ChecksumOptionSet = $false
 $Sha256OptionSet = $false
 
-function Test-RewireConsumesStandardInput {
+function Test-RewireUsesTerminalInput {
     param([string[]]$Arguments)
-    return $Arguments -contains "--token-stdin" -or $Arguments -contains "--non-interactive"
+    if ($Arguments -contains "--token-stdin" -or $Arguments -contains "--non-interactive") {
+        return $false
+    }
+    if ($Arguments -contains "--help" -or $Arguments -contains "-h" -or
+        $Arguments -contains "--version" -or $Arguments -contains "-V") {
+        return $false
+    }
+    $ValueOptions = @("--baseurl", "--token", "--client", "--model", "--model-name", "--sdk", "--home")
+    $SkipValue = $false
+    foreach ($Argument in $Arguments) {
+        if ($SkipValue) {
+            $SkipValue = $false
+            continue
+        }
+        if ($Argument -in $ValueOptions) {
+            $SkipValue = $true
+            continue
+        }
+        if ($Argument -match '^--(?:baseurl|token|client|model|model-name|sdk|home)=') { continue }
+        if ($Argument.StartsWith("-")) { continue }
+        if ($Argument -in "doctor", "backup", "completions") { return $false }
+        if ($Argument -in "configure", "tui", "plan") { return $true }
+        if ($Argument -in "rollback", "remove") {
+            return $Arguments -notcontains "--yes" -and $Arguments -notcontains "--json"
+        }
+    }
+    return $true
 }
 
 function Initialize-RewireNativeConsole {
@@ -137,7 +163,7 @@ function Invoke-Rewire {
     [IntPtr]$OriginalInput = [IntPtr]::Zero
     [IntPtr]$ConsoleInput = [IntPtr]::Zero
     $AttachConsole = [Console]::IsInputRedirected -and
-        -not (Test-RewireConsumesStandardInput -Arguments $Arguments)
+        (Test-RewireUsesTerminalInput -Arguments $Arguments)
     try {
         if ($AttachConsole) {
             Initialize-RewireNativeConsole
