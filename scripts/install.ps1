@@ -3,18 +3,6 @@ $ErrorActionPreference = "Stop"
 # Capture native exit codes ourselves so PowerShell 7 preference changes do not preempt cleanup.
 $PSNativeCommandUseErrorActionPreference = $false
 
-# PowerShell's invocation operator replaces a native child's redirected stdin. Consume the
-# bootstrap stream here so the explicit stdin modes can receive it through a new child pipe.
-$script:RewireRedirectedInput = $null
-if ([Console]::IsInputRedirected) {
-    $InputLines = @($input)
-    $script:RewireRedirectedInput = if ($InputLines.Count -eq 0) {
-        ""
-    } else {
-        ($InputLines -join [Environment]::NewLine) + [Environment]::NewLine
-    }
-}
-
 $Repository = "CCH-HQ/rewire"
 $Release = if ($env:REWIRE_RELEASE) { $env:REWIRE_RELEASE } else { "latest" }
 $InstallDir = $env:REWIRE_INSTALL_DIR
@@ -70,6 +58,7 @@ function Initialize-RewireNativeConsole {
     if ("Rewire.NativeConsole" -as [type]) { return }
     Add-Type -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 
 namespace Rewire {
@@ -79,7 +68,39 @@ namespace Rewire {
         private const uint ShareReadWrite = 3;
         private const uint OpenExisting = 3;
         private const uint HandleFlagInherit = 1;
+        private const uint StartfUseStdHandles = 0x100;
+        private const uint Infinite = 0xffffffff;
         private static readonly IntPtr InvalidHandle = new IntPtr(-1);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct StartupInfo {
+            public int cb;
+            public string lpReserved;
+            public string lpDesktop;
+            public string lpTitle;
+            public int dwX;
+            public int dwY;
+            public int dwXSize;
+            public int dwYSize;
+            public int dwXCountChars;
+            public int dwYCountChars;
+            public int dwFillAttribute;
+            public int dwFlags;
+            public short wShowWindow;
+            public short cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProcessInformation {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public int dwProcessId;
+            public int dwThreadId;
+        }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern IntPtr CreateFile(
@@ -99,7 +120,26 @@ namespace Rewire {
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetHandleInformation(IntPtr handle, out uint flags);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateProcess(
+            string applicationName, string commandLine, IntPtr processAttributes,
+            IntPtr threadAttributes, bool inheritHandles, uint creationFlags,
+            IntPtr environment, string currentDirectory, ref StartupInfo startupInfo,
+            out ProcessInformation processInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
 
         public static bool TryAttachInput(out IntPtr original, out IntPtr console) {
             original = GetStdHandle(StandardInputHandle);
@@ -122,6 +162,51 @@ namespace Rewire {
         public static void RestoreInput(IntPtr original, IntPtr console) {
             SetStdHandle(StandardInputHandle, original);
             CloseHandle(console);
+        }
+
+        public static bool TryEnableInputInheritance(out IntPtr input, out uint originalFlags) {
+            input = GetStdHandle(StandardInputHandle);
+            originalFlags = 0;
+            if (input == IntPtr.Zero || input == InvalidHandle
+                || !GetHandleInformation(input, out originalFlags)) {
+                return false;
+            }
+            if (SetHandleInformation(input, HandleFlagInherit, HandleFlagInherit)) {
+                return true;
+            }
+            input = IntPtr.Zero;
+            return false;
+        }
+
+        public static void RestoreInputInheritance(IntPtr input, uint originalFlags) {
+            SetHandleInformation(input, HandleFlagInherit, originalFlags & HandleFlagInherit);
+        }
+
+        public static int RunWithInheritedStandardInput(string applicationName, string commandLine) {
+            var startupInfo = new StartupInfo {
+                cb = Marshal.SizeOf<StartupInfo>(),
+                dwFlags = unchecked((int)StartfUseStdHandles),
+                hStdInput = GetStdHandle(StandardInputHandle),
+                hStdOutput = GetStdHandle(-11),
+                hStdError = GetStdHandle(-12),
+            };
+            ProcessInformation processInformation;
+            if (!CreateProcess(
+                applicationName, commandLine, IntPtr.Zero, IntPtr.Zero, true, 0,
+                IntPtr.Zero, null, ref startupInfo, out processInformation)) {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "could not start Rewire");
+            }
+            try {
+                WaitForSingleObject(processInformation.hProcess, Infinite);
+                uint exitCode;
+                if (!GetExitCodeProcess(processInformation.hProcess, out exitCode)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "could not read Rewire exit code");
+                }
+                return unchecked((int)exitCode);
+            } finally {
+                CloseHandle(processInformation.hThread);
+                CloseHandle(processInformation.hProcess);
+            }
         }
 
     }
@@ -171,28 +256,19 @@ function Invoke-RewireNativeProcess {
     return $Process.ExitCode
 }
 
-function Invoke-RewireRedirectedInputProcess {
+function Invoke-RewireInheritedInputProcess {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$InputText
+        [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
-    $StartInfo.FileName = $Path
-    $StartInfo.UseShellExecute = $false
-    $StartInfo.RedirectStandardInput = $true
-    $StartInfo.Arguments = (($Arguments | ForEach-Object {
+    $CommandLine = (ConvertTo-RewireNativeArgument -Argument $Path)
+    if ($Arguments.Count -gt 0) {
+        $CommandLine += " " + (($Arguments | ForEach-Object {
         ConvertTo-RewireNativeArgument -Argument $_
-    }) -join ' ')
-    $Process = [Diagnostics.Process]::Start($StartInfo)
-    try {
-        $Process.StandardInput.Write($InputText)
-    } finally {
-        $Process.StandardInput.Close()
+        }) -join ' ')
     }
-    $Process.WaitForExit()
-    return $Process.ExitCode
+    return [Rewire.NativeConsole]::RunWithInheritedStandardInput($Path, $CommandLine)
 }
 
 function Invoke-Rewire {
@@ -204,6 +280,8 @@ function Invoke-Rewire {
     $script:RewireExitCode = 0
     [IntPtr]$OriginalInput = [IntPtr]::Zero
     [IntPtr]$ConsoleInput = [IntPtr]::Zero
+    [IntPtr]$InheritedInput = [IntPtr]::Zero
+    [uint32]$OriginalInputFlags = 0
     $AttachConsole = [Console]::IsInputRedirected -and
         (Test-RewireUsesTerminalInput -Arguments $Arguments)
     try {
@@ -213,17 +291,22 @@ function Invoke-Rewire {
                 [ref]$OriginalInput,
                 [ref]$ConsoleInput
             )
+        } elseif ([Console]::IsInputRedirected -and
+            (Test-RewireConsumesStandardInput -Arguments $Arguments)) {
+            Initialize-RewireNativeConsole
+            [void][Rewire.NativeConsole]::TryEnableInputInheritance(
+                [ref]$InheritedInput,
+                [ref]$OriginalInputFlags
+            )
         }
 
         if ($ConsoleInput -ne [IntPtr]::Zero) {
             $script:RewireExitCode = Invoke-RewireNativeProcess -Path $Path -Arguments $Arguments
             $global:LASTEXITCODE = $script:RewireExitCode
-        } elseif ($null -ne $script:RewireRedirectedInput -and
-            (Test-RewireConsumesStandardInput -Arguments $Arguments)) {
-            $script:RewireExitCode = Invoke-RewireRedirectedInputProcess `
+        } elseif ($InheritedInput -ne [IntPtr]::Zero) {
+            $script:RewireExitCode = Invoke-RewireInheritedInputProcess `
                 -Path $Path `
-                -Arguments $Arguments `
-                -InputText $script:RewireRedirectedInput
+                -Arguments $Arguments
             $global:LASTEXITCODE = $script:RewireExitCode
         } else {
             & $Path @Arguments
@@ -232,6 +315,9 @@ function Invoke-Rewire {
     } finally {
         if ($ConsoleInput -ne [IntPtr]::Zero) {
             [Rewire.NativeConsole]::RestoreInput($OriginalInput, $ConsoleInput)
+        }
+        if ($InheritedInput -ne [IntPtr]::Zero) {
+            [Rewire.NativeConsole]::RestoreInputInheritance($InheritedInput, $OriginalInputFlags)
         }
     }
 }
