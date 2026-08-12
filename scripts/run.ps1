@@ -85,6 +85,10 @@ namespace Rewire {
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetHandleInformation(IntPtr handle, out uint flags);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool CloseHandle(IntPtr handle);
 
         public static bool TryAttachInput(out IntPtr original, out IntPtr console) {
@@ -108,6 +112,24 @@ namespace Rewire {
         public static void RestoreInput(IntPtr original, IntPtr console) {
             SetStdHandle(StandardInputHandle, original);
             CloseHandle(console);
+        }
+
+        public static bool TryEnableInputInheritance(out IntPtr input, out uint originalFlags) {
+            input = GetStdHandle(StandardInputHandle);
+            originalFlags = 0;
+            if (input == IntPtr.Zero || input == InvalidHandle
+                || !GetHandleInformation(input, out originalFlags)) {
+                return false;
+            }
+            if (SetHandleInformation(input, HandleFlagInherit, HandleFlagInherit)) {
+                return true;
+            }
+            input = IntPtr.Zero;
+            return false;
+        }
+
+        public static void RestoreInputInheritance(IntPtr input, uint originalFlags) {
+            SetHandleInformation(input, HandleFlagInherit, originalFlags & HandleFlagInherit);
         }
     }
 }
@@ -156,26 +178,6 @@ function Invoke-RewireNativeProcess {
     return $Process.ExitCode
 }
 
-function Invoke-RewireRedirectedInputProcess {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
-    )
-
-    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
-    $StartInfo.FileName = $Path
-    $StartInfo.UseShellExecute = $false
-    $StartInfo.RedirectStandardInput = $true
-    $StartInfo.Arguments = (($Arguments | ForEach-Object {
-        ConvertTo-RewireNativeArgument -Argument $_
-    }) -join ' ')
-    $Process = [Diagnostics.Process]::Start($StartInfo)
-    $Process.StandardInput.Write([Console]::In.ReadToEnd())
-    $Process.StandardInput.Close()
-    $Process.WaitForExit()
-    return $Process.ExitCode
-}
-
 function Invoke-Rewire {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -185,6 +187,8 @@ function Invoke-Rewire {
     $script:RewireExitCode = 0
     [IntPtr]$OriginalInput = [IntPtr]::Zero
     [IntPtr]$ConsoleInput = [IntPtr]::Zero
+    [IntPtr]$InheritedInput = [IntPtr]::Zero
+    [uint32]$OriginalInputFlags = 0
     $AttachConsole = [Console]::IsInputRedirected -and
         (Test-RewireUsesTerminalInput -Arguments $Arguments)
     try {
@@ -194,16 +198,17 @@ function Invoke-Rewire {
                 [ref]$OriginalInput,
                 [ref]$ConsoleInput
             )
-        }
-
-        if ($ConsoleInput -ne [IntPtr]::Zero) {
-            $script:RewireExitCode = Invoke-RewireNativeProcess -Path $Path -Arguments $Arguments
-            $global:LASTEXITCODE = $script:RewireExitCode
         } elseif ([Console]::IsInputRedirected -and
             (Test-RewireConsumesStandardInput -Arguments $Arguments)) {
-            $script:RewireExitCode = Invoke-RewireRedirectedInputProcess `
-                -Path $Path `
-                -Arguments $Arguments
+            Initialize-RewireNativeConsole
+            [void][Rewire.NativeConsole]::TryEnableInputInheritance(
+                [ref]$InheritedInput,
+                [ref]$OriginalInputFlags
+            )
+        }
+
+        if ($ConsoleInput -ne [IntPtr]::Zero -or $InheritedInput -ne [IntPtr]::Zero) {
+            $script:RewireExitCode = Invoke-RewireNativeProcess -Path $Path -Arguments $Arguments
             $global:LASTEXITCODE = $script:RewireExitCode
         } else {
             & $Path @Arguments
@@ -212,6 +217,9 @@ function Invoke-Rewire {
     } finally {
         if ($ConsoleInput -ne [IntPtr]::Zero) {
             [Rewire.NativeConsole]::RestoreInput($OriginalInput, $ConsoleInput)
+        }
+        if ($InheritedInput -ne [IntPtr]::Zero) {
+            [Rewire.NativeConsole]::RestoreInputInheritance($InheritedInput, $OriginalInputFlags)
         }
     }
 }
