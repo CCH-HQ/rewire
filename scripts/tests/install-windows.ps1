@@ -141,9 +141,10 @@ try {
             -Script $Installer `
             -Arguments @("--asset-base-url", $Assets, "--install-dir", $InstallDir, "--", $Mode) `
             -Input "bootstrap-source" `
-            -Environment @{ REWIRE_TEST_OUTPUT = $ModeOutput; REWIRE_TEST_REQUIRE_TERMINAL = "1" }
-        if ($ModeStatus -ne 91) {
-            throw "$Mode unexpectedly attached terminal input; child exit code $ModeStatus"
+            -Environment @{ REWIRE_TEST_OUTPUT = $ModeOutput; REWIRE_TEST_REQUIRE_TERMINAL = "1"; REWIRE_TEST_RECORD_TERMINAL = "1" }
+        $ModeLines = @(Get-Content -LiteralPath $ModeOutput)
+        if ($ModeStatus -ne 1 -or $ModeLines -notcontains "stdin-is-terminal=false") {
+            throw "$Mode unexpectedly attached terminal input; fixture output: $($ModeLines -join ' | ')"
         }
     }
 

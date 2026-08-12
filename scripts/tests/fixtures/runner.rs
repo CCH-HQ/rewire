@@ -15,6 +15,10 @@ fn main() {
     for argument in &arguments {
         writeln!(writer, "argument={argument}").expect("write fixture argument");
     }
+    if env::var_os("REWIRE_TEST_RECORD_TERMINAL").is_some() {
+        writeln!(writer, "stdin-is-terminal={}", std::io::stdin().is_terminal())
+            .expect("write fixture terminal state");
+    }
     writer.flush().expect("flush fixture output");
 
     if env::var_os("REWIRE_TEST_REQUIRE_TERMINAL").is_some()
