@@ -47,6 +47,11 @@ function Test-RewireUsesTerminalInput {
     return $true
 }
 
+function Test-RewireConsumesStandardInput {
+    param([string[]]$Arguments)
+    return $Arguments -contains "--token-stdin" -or $Arguments -contains "--non-interactive"
+}
+
 function Initialize-RewireNativeConsole {
     if ("Rewire.NativeConsole" -as [type]) { return }
     Add-Type -TypeDefinition @'
@@ -151,6 +156,27 @@ function Invoke-RewireNativeProcess {
     return $Process.ExitCode
 }
 
+function Invoke-RewireRedirectedInputProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $StartInfo.FileName = $Path
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.RedirectStandardInput = $true
+    $StartInfo.Arguments = (($Arguments | ForEach-Object {
+        ConvertTo-RewireNativeArgument -Argument $_
+    }) -join ' ')
+    $Process = [Diagnostics.Process]::Start($StartInfo)
+    $SourceInput = [Console]::OpenStandardInput()
+    $SourceInput.CopyTo($Process.StandardInput.BaseStream)
+    $Process.StandardInput.Close()
+    $Process.WaitForExit()
+    return $Process.ExitCode
+}
+
 function Invoke-Rewire {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -173,6 +199,12 @@ function Invoke-Rewire {
 
         if ($ConsoleInput -ne [IntPtr]::Zero) {
             $script:RewireExitCode = Invoke-RewireNativeProcess -Path $Path -Arguments $Arguments
+            $global:LASTEXITCODE = $script:RewireExitCode
+        } elseif ([Console]::IsInputRedirected -and
+            (Test-RewireConsumesStandardInput -Arguments $Arguments)) {
+            $script:RewireExitCode = Invoke-RewireRedirectedInputProcess `
+                -Path $Path `
+                -Arguments $Arguments
             $global:LASTEXITCODE = $script:RewireExitCode
         } else {
             & $Path @Arguments
