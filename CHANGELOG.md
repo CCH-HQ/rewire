@@ -4,6 +4,12 @@ All notable changes to Rewire are documented here.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-08-13
+
+### Fixed
+
+- Reused the guided workflow to ask only unanswered configuration questions on interactive CLI and bootstrap-script invocations instead of silently deriving omitted clients from detected files; complete and non-interactive commands retain deterministic argument-only behavior.
+
 ## [0.0.1] - 2026-08-11
 
 ### Added
@@ -31,5 +37,6 @@ All notable changes to Rewire are documented here.
 - Secret-bearing files and transaction state use private permissions; backups are authenticated-encrypted and plaintext credential leakage is checked in integration and live-client E2E tests.
 - Configuration writes reject unsafe paths, symlinks, read-only targets, and time-of-check/time-of-use changes before committing a transaction.
 
-[Unreleased]: https://github.com/CCH-HQ/rewire/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/CCH-HQ/rewire/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/CCH-HQ/rewire/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/CCH-HQ/rewire/releases/tag/v0.0.1

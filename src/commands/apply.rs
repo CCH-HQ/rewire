@@ -1,13 +1,20 @@
 use super::configuration;
 use crate::cli::{Cli, Output};
 use anyhow::Result;
-use rewire::{apply_plan, build_plan};
+use rewire::{apply_plan, build_plan_with_catalog};
 use std::path::Path;
 
 /// Plan a root invocation and either review it or commit it when `--yes` is present.
-pub(super) fn run(home: &Path, cli: &mut Cli, output: Output) -> Result<()> {
-    let input = configuration::input(cli, home)?;
-    let plan = build_plan(home, &input)?;
+pub(super) fn run(
+    home: &Path,
+    cli: &mut Cli,
+    output: Output,
+    interactive_terminal: bool,
+) -> Result<()> {
+    let Some(completed) = configuration::input(cli, home, interactive_terminal)? else {
+        return Ok(());
+    };
+    let plan = build_plan_with_catalog(home, &completed.input, &completed.models)?;
     if cli.execution.dry_run || !cli.execution.yes {
         return output.plan(&plan);
     }

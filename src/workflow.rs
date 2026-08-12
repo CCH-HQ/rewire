@@ -63,6 +63,24 @@ struct WorkflowInput {
     models: Vec<ModelConfig>,
 }
 
+/// CLI values that may be completed by the guided prompts when a terminal is available.
+#[derive(Debug, Default)]
+pub struct PartialInput {
+    pub base_url: Option<String>,
+    pub token: Option<crate::Secret>,
+    pub clients: Option<Vec<Client>>,
+    pub model: Option<String>,
+    pub model_name: Option<String>,
+    pub sdk: Option<OpenCodeSdk>,
+}
+
+/// A complete configuration plus any model catalog selected by the prompt workflow.
+#[derive(Debug)]
+pub struct CompletedInput {
+    pub input: Input,
+    pub models: Vec<ModelConfig>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ReviewSummary {
     updates: usize,
@@ -240,6 +258,125 @@ pub fn run_with_debug(home: &Path, color: bool, debug: bool) -> Result<()> {
     }
 }
 
+/// Fill unanswered CLI configuration values through the same applicable prompts as `configure`.
+///
+/// Values already supplied on the command line remain authoritative. Optional CLI overrides such
+/// as `--sdk` and `--model-name` retain their normal inferred defaults when omitted.
+///
+/// # Errors
+///
+/// Returns an error when prompting or validation fails. A cancelled prompt returns `Ok(None)`.
+pub fn complete_input(
+    home: &Path,
+    partial: PartialInput,
+    color: bool,
+    debug: bool,
+) -> Result<Option<CompletedInput>> {
+    let palette = Palette::new(color);
+    let render_config = render_config(palette.enabled);
+    complete_input_with_render(home, partial, &render_config, palette, debug)
+}
+
+fn complete_input_with_render(
+    home: &Path,
+    partial: PartialInput,
+    render_config: &RenderConfig<'static>,
+    palette: Palette,
+    debug: bool,
+) -> Result<Option<CompletedInput>> {
+    let clients = if let Some(clients) = partial.clients {
+        clients
+    } else {
+        let Some(clients) = prompt_clients(home, render_config, palette)? else {
+            return Ok(None);
+        };
+        clients
+    };
+    let base_url = if let Some(base_url) = partial.base_url {
+        base_url
+    } else {
+        let Some(base_url) = prompt_base_url(render_config, palette)? else {
+            return Ok(None);
+        };
+        base_url
+    };
+    let token = if let Some(token) = partial.token {
+        token
+    } else {
+        let Some(token) = prompt_token(render_config, palette)? else {
+            return Ok(None);
+        };
+        token
+    };
+
+    let mut model = partial.model;
+    let mut model_name = partial.model_name;
+    let mut sdk = partial.sdk;
+    let mut models = Vec::new();
+    let mut selected_display_name = None;
+    let mut selected_sdk = None;
+    if model.is_none() && clients.iter().copied().any(Client::requires_model) {
+        let selected = match prompt_model_for_clients(
+            &clients,
+            &base_url,
+            token.expose(),
+            render_config,
+            palette,
+            debug,
+        )? {
+            ModelPromptOutcome::Selected(selected) => selected,
+            ModelPromptOutcome::Cancelled | ModelPromptOutcome::Skipped => return Ok(None),
+        };
+        selected_display_name = selected.display_name;
+        selected_sdk = Some(selected.sdk);
+        models = selected.models;
+        model = Some(selected.id);
+    }
+    let adding_all_models = !models.is_empty();
+
+    if sdk.is_none() && clients.contains(&Client::OpenCode) {
+        if adding_all_models {
+            sdk = selected_sdk;
+        } else {
+            let Some(chosen_sdk) = prompt_sdk(selected_sdk, render_config)? else {
+                return Ok(None);
+            };
+            sdk = Some(chosen_sdk);
+        }
+    }
+    if model_name.is_none() {
+        if adding_all_models {
+            model_name = selected_display_name;
+        } else if clients.contains(&Client::OpenClaw)
+            || (clients.contains(&Client::OpenCode)
+                && sdk.is_some_and(|sdk| sdk.native_provider_id().is_none()))
+        {
+            model_name = match prompt_model_name(
+                selected_display_name.as_deref(),
+                render_config,
+                palette,
+            )? {
+                ModelNameChoice::Cancel => return Ok(None),
+                ModelNameChoice::Omit => None,
+                ModelNameChoice::Value(model_name) => Some(model_name),
+            };
+        }
+    }
+
+    Client::validate_model_configuration(&clients, model.as_deref(), model_name.as_deref(), sdk)?;
+    Ok(Some(CompletedInput {
+        input: Input {
+            base_url,
+            token,
+            clients,
+            model,
+            model_name,
+            sdk,
+        },
+        models,
+    }))
+}
+
 fn render_config(color: bool) -> RenderConfig<'static> {
     if color {
         // The default also honors the conventional NO_COLOR environment variable.
@@ -255,11 +392,26 @@ fn collect_input(
     home: &Path,
     debug: bool,
 ) -> Result<Option<WorkflowInput>> {
+    let Some(completed) =
+        complete_input_with_render(home, PartialInput::default(), render_config, palette, debug)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(WorkflowInput {
+        input: completed.input,
+        models: completed.models,
+    }))
+}
+
+fn prompt_clients(
+    home: &Path,
+    render_config: &RenderConfig<'static>,
+    palette: Palette,
+) -> Result<Option<Vec<Client>>> {
     let detected = detect_clients(home);
     let labels = client_labels(&detected);
     let defaults = default_client_indexes(&detected);
-
-    let selected = loop {
+    loop {
         let result = MultiSelect::new(CLIENT_PROMPT, labels.clone())
             .with_default(&defaults)
             .without_filtering()
@@ -269,92 +421,15 @@ fn collect_input(
             return Ok(None);
         };
         if !options.is_empty() {
-            break options;
+            return Ok(Some(
+                options
+                    .into_iter()
+                    .map(|option| CLIENTS[option.index])
+                    .collect(),
+            ));
         }
         eprintln!("{}", palette.danger("Select at least one client."));
-    };
-
-    let Some(base_url) = prompt_base_url(render_config, palette)? else {
-        return Ok(None);
-    };
-    let Some(token) = prompt_token(render_config, palette)? else {
-        return Ok(None);
-    };
-
-    let clients = selected
-        .into_iter()
-        .map(|option| CLIENTS[option.index])
-        .collect::<Vec<_>>();
-    let selected_model = match prompt_model_for_clients(
-        &clients,
-        &base_url,
-        token.expose(),
-        render_config,
-        palette,
-        debug,
-    )? {
-        ModelPromptOutcome::Skipped => None,
-        ModelPromptOutcome::Cancelled => return Ok(None),
-        ModelPromptOutcome::Selected(model) => Some(model),
-    };
-    let adding_all_models = selected_model
-        .as_ref()
-        .is_some_and(|model| !model.models.is_empty());
-    let sdk = if clients.contains(&Client::OpenCode) {
-        if adding_all_models {
-            selected_model.as_ref().map(|model| model.sdk)
-        } else {
-            let Some(sdk) = prompt_sdk(
-                selected_model.as_ref().map(|model| model.sdk),
-                render_config,
-            )?
-            else {
-                return Ok(None);
-            };
-            Some(sdk)
-        }
-    } else {
-        None
-    };
-    let model_name = if adding_all_models {
-        selected_model
-            .as_ref()
-            .and_then(|model| model.display_name.clone())
-    } else if clients.contains(&Client::OpenClaw)
-        || (clients.contains(&Client::OpenCode)
-            && sdk.is_some_and(|sdk| sdk.native_provider_id().is_none()))
-    {
-        match prompt_model_name(
-            selected_model
-                .as_ref()
-                .and_then(|model| model.display_name.as_deref()),
-            render_config,
-            palette,
-        )? {
-            ModelNameChoice::Cancel => return Ok(None),
-            ModelNameChoice::Omit => None,
-            ModelNameChoice::Value(model_name) => Some(model_name),
-        }
-    } else {
-        None
-    };
-    let models = selected_model
-        .as_ref()
-        .map(|model| model.models.clone())
-        .unwrap_or_default();
-    let model = selected_model.map(|model| model.id);
-
-    Ok(Some(WorkflowInput {
-        input: Input {
-            base_url,
-            token,
-            clients,
-            model,
-            model_name,
-            sdk,
-        },
-        models,
-    }))
+    }
 }
 
 fn prompt_model_for_clients(

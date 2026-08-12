@@ -38,4 +38,7 @@ pub use security::validate_base_url;
 pub use security::{home_from_override, read_token, redact, stable_json, transaction_root};
 pub use transaction::available_transactions;
 pub use transaction::{apply_plan, rollback};
-pub use workflow::{run as run_workflow, run_with_debug as run_workflow_with_debug};
+pub use workflow::{
+    CompletedInput, PartialInput, complete_input, run as run_workflow,
+    run_with_debug as run_workflow_with_debug,
+};

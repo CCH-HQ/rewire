@@ -1115,6 +1115,76 @@ fn non_interactive_mode_reports_missing_required_input() {
 }
 
 #[test]
+fn non_terminal_configuration_reports_each_missing_required_input() {
+    let home = tempdir().unwrap();
+    let cases = [
+        (vec![], "--baseurl is required"),
+        (
+            vec!["--baseurl", "https://gateway.example"],
+            "token is required",
+        ),
+        (
+            vec!["--baseurl", "https://gateway.example", "--token", "TOKEN"],
+            "no client selected; use --client",
+        ),
+        (
+            vec![
+                "--baseurl",
+                "https://gateway.example",
+                "--token",
+                "TOKEN",
+                "--client",
+                "hermes",
+            ],
+            "--model is required when configuring hermes",
+        ),
+    ];
+
+    for (args, expected) in cases {
+        let mut command = Command::cargo_bin("rewire").unwrap();
+        command.args(args).arg("--home").arg(home.path());
+        command
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected));
+    }
+}
+
+#[test]
+fn complete_non_terminal_configuration_does_not_open_prompts() {
+    let home = tempdir().unwrap();
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args([
+            "--baseurl",
+            "https://gateway.example",
+            "--token",
+            "TOKEN",
+            "--client",
+            "claude",
+            "--home",
+        ])
+        .arg(home.path())
+        .args(["plan", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"client\": \"claude\""));
+}
+
+#[test]
+fn invalid_supplied_values_fail_before_missing_input_completion() {
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args(["--baseurl", "not-a-url", "--token", "TOKEN"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "base URL must be an absolute http(s) URL",
+        ))
+        .stderr(predicate::str::contains("no client selected").not());
+}
+
+#[test]
 fn explicit_workflow_rejects_piped_terminal_boundaries() {
     Command::cargo_bin("rewire")
         .unwrap()
