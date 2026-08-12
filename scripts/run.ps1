@@ -33,6 +33,7 @@ namespace Rewire {
         private const uint GenericRead = 0x80000000;
         private const uint ShareReadWrite = 3;
         private const uint OpenExisting = 3;
+        private const uint HandleFlagInherit = 1;
         private static readonly IntPtr InvalidHandle = new IntPtr(-1);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -49,6 +50,10 @@ namespace Rewire {
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool CloseHandle(IntPtr handle);
 
         public static bool TryAttachInput(out IntPtr original, out IntPtr console) {
@@ -60,7 +65,8 @@ namespace Rewire {
                 console = IntPtr.Zero;
                 return false;
             }
-            if (SetStdHandle(StandardInputHandle, console)) {
+            if (SetHandleInformation(console, HandleFlagInherit, HandleFlagInherit)
+                && SetStdHandle(StandardInputHandle, console)) {
                 return true;
             }
             CloseHandle(console);
@@ -75,6 +81,48 @@ namespace Rewire {
     }
 }
 '@
+}
+
+function ConvertTo-RewireNativeArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Argument)
+
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') { return $Argument }
+    $Builder = [Text.StringBuilder]::new()
+    [void]$Builder.Append('"')
+    $Backslashes = 0
+    foreach ($Character in $Argument.ToCharArray()) {
+        if ($Character -eq '\') {
+            $Backslashes += 1
+        } elseif ($Character -eq '"') {
+            [void]$Builder.Append(('\' * (2 * $Backslashes + 1)))
+            [void]$Builder.Append('"')
+            $Backslashes = 0
+        } else {
+            if ($Backslashes -gt 0) { [void]$Builder.Append(('\' * $Backslashes)) }
+            [void]$Builder.Append($Character)
+            $Backslashes = 0
+        }
+    }
+    if ($Backslashes -gt 0) { [void]$Builder.Append(('\' * (2 * $Backslashes))) }
+    [void]$Builder.Append('"')
+    return $Builder.ToString()
+}
+
+function Invoke-RewireNativeProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $StartInfo.FileName = $Path
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.Arguments = (($Arguments | ForEach-Object {
+        ConvertTo-RewireNativeArgument -Argument $_
+    }) -join ' ')
+    $Process = [Diagnostics.Process]::Start($StartInfo)
+    $Process.WaitForExit()
+    return $Process.ExitCode
 }
 
 function Invoke-Rewire {
@@ -97,8 +145,12 @@ function Invoke-Rewire {
             )
         }
 
-        & $Path @Arguments
-        $script:RewireExitCode = $LASTEXITCODE
+        if ($ConsoleInput -ne [IntPtr]::Zero) {
+            $script:RewireExitCode = Invoke-RewireNativeProcess -Path $Path -Arguments $Arguments
+        } else {
+            & $Path @Arguments
+            $script:RewireExitCode = $LASTEXITCODE
+        }
     } finally {
         if ($ConsoleInput -ne [IntPtr]::Zero) {
             [Rewire.NativeConsole]::RestoreInput($OriginalInput, $ConsoleInput)

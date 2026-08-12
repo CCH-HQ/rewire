@@ -120,6 +120,17 @@ try {
         throw "run.ps1 did not preserve the default configure invocation"
     }
 
+    $QuotedOutput = Join-Path $TemporaryDirectory "quoted-terminal-arguments"
+    $QuotedStatus = Invoke-WithRedirectedInput `
+        -Script $Runner `
+        -Arguments @("--asset-base-url", $Assets, "--", "--fixture-terminal", "value with spaces") `
+        -Input "bootstrap-source" `
+        -Environment @{ REWIRE_TEST_OUTPUT = $QuotedOutput; REWIRE_TEST_REQUIRE_TERMINAL = "1"; TEMP = $RunnerTemp }
+    $QuotedLines = @(Get-Content -LiteralPath $QuotedOutput)
+    if ($QuotedStatus -ne 0 -or $QuotedLines -notcontains "argument=value with spaces") {
+        throw "console-attached invocation did not preserve quoted arguments"
+    }
+
     foreach ($Mode in "--token-stdin", "--non-interactive") {
         $ModeName = $Mode.TrimStart("-")
         $InputOutput = Join-Path $TemporaryDirectory "$ModeName-arguments"
