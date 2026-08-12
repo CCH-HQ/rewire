@@ -10,6 +10,59 @@ $Package = Join-Path $TemporaryDirectory "package"
 $RunnerTemp = Join-Path $TemporaryDirectory "runner-temp"
 $PersistentInstall = Join-Path $TemporaryDirectory "must-not-be-used"
 
+function Initialize-TestConsole {
+    if (-not ("Rewire.TestConsole" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace Rewire {
+    public static class TestConsole {
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetConsoleWindow();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AllocConsole();
+
+        public static void EnsureAllocated() {
+            if (GetConsoleWindow() == IntPtr.Zero && !AllocConsole()) {
+                throw new InvalidOperationException("could not allocate the test console");
+            }
+        }
+    }
+}
+'@
+    }
+    [Rewire.TestConsole]::EnsureAllocated()
+}
+
+function Invoke-WithRedirectedInput {
+    param(
+        [Parameter(Mandatory = $true)][string]$Script,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Input,
+        [Parameter(Mandatory = $true)][hashtable]$Environment
+    )
+
+    Initialize-TestConsole
+    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $StartInfo.FileName = Join-Path $PSHOME "pwsh.exe"
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.RedirectStandardInput = $true
+    foreach ($Argument in @("-NoLogo", "-NoProfile", "-File", $Script) + $Arguments) {
+        $StartInfo.ArgumentList.Add($Argument)
+    }
+    foreach ($Entry in $Environment.GetEnumerator()) {
+        $StartInfo.Environment[$Entry.Key] = [string]$Entry.Value
+    }
+    $Process = [Diagnostics.Process]::Start($StartInfo)
+    $Process.StandardInput.WriteLine($Input)
+    $Process.StandardInput.Close()
+    $Process.WaitForExit()
+    return $Process.ExitCode
+}
+
 New-Item -ItemType Directory -Path $Assets, $Package, $RunnerTemp | Out-Null
 try {
     # Compile the isolated fixture with the CI toolchain; no test hook enters the Rewire binary.
@@ -80,6 +133,32 @@ try {
     $DefaultLines = @(Get-Content -LiteralPath (Join-Path $TemporaryDirectory "default-arguments"))
     if ($DefaultLines[1] -ne "argument=configure") {
         throw "run.ps1 did not default to configure; fixture output: $($DefaultLines -join ' | ')"
+    }
+
+    $TerminalOutput = Join-Path $TemporaryDirectory "terminal-arguments"
+    $TerminalStatus = Invoke-WithRedirectedInput `
+        -Script $Runner `
+        -Arguments @("--asset-base-url", $Assets) `
+        -Input "bootstrap-source" `
+        -Environment @{ REWIRE_TEST_OUTPUT = $TerminalOutput; REWIRE_TEST_REQUIRE_TERMINAL = "1"; TEMP = $RunnerTemp }
+    if ($TerminalStatus -ne 0) {
+        throw "run.ps1 did not attach console input; child exit code $TerminalStatus"
+    }
+    if ((Get-Content -LiteralPath $TerminalOutput) -notcontains "argument=configure") {
+        throw "run.ps1 did not preserve the default configure invocation"
+    }
+
+    foreach ($Mode in "--token-stdin", "--non-interactive") {
+        $ModeName = $Mode.TrimStart("-")
+        $InputOutput = Join-Path $TemporaryDirectory "$ModeName-arguments"
+        $InputStatus = Invoke-WithRedirectedInput `
+            -Script $Runner `
+            -Arguments @("--asset-base-url", $Assets, "--", "--fixture-read-stdin", $Mode) `
+            -Input "$ModeName-input" `
+            -Environment @{ REWIRE_TEST_OUTPUT = $InputOutput; TEMP = $RunnerTemp }
+        if ($InputStatus -ne 0 -or (Get-Content -LiteralPath $InputOutput) -notcontains "stdin=$ModeName-input") {
+            throw "$Mode did not preserve redirected standard input"
+        }
     }
 
     $Isolated = Join-Path $TemporaryDirectory "isolated"

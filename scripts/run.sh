@@ -48,6 +48,17 @@ require_value() {
     [ "$count" -ge 2 ] || fail "$option requires a value"
 }
 
+should_attach_terminal_input() {
+    [ ! -t 0 ] && [ -t 1 ] || return 1
+    ( : < /dev/tty ) 2>/dev/null || return 1
+    for argument in "$@"; do
+        case "$argument" in
+            --token-stdin | --non-interactive) return 1 ;;
+        esac
+    done
+    return 0
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --release)
@@ -194,16 +205,16 @@ binary=$install_dir/rewire
 
 # Do not use exec: the wrapper must remove the temporary binary after Rewire exits.
 if [ "$#" -eq 0 ]; then
-    if "$binary" configure; then
-        status=0
-    else
-        status=$?
-    fi
+    set -- configure
+fi
+if should_attach_terminal_input "$@"; then
+    "$binary" "$@" < /dev/tty || status=$?
 elif "$binary" "$@"; then
     status=0
 else
     status=$?
 fi
+status=${status:-0}
 
 cleanup
 tmpdir=

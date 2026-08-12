@@ -13,6 +13,59 @@ $Package = Join-Path $TemporaryDirectory "package"
 $InstallDir = Join-Path $TemporaryDirectory "install"
 $FixtureHome = Join-Path $TemporaryDirectory "fixture home"
 
+function Initialize-TestConsole {
+    if (-not ("Rewire.TestConsole" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace Rewire {
+    public static class TestConsole {
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetConsoleWindow();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AllocConsole();
+
+        public static void EnsureAllocated() {
+            if (GetConsoleWindow() == IntPtr.Zero && !AllocConsole()) {
+                throw new InvalidOperationException("could not allocate the test console");
+            }
+        }
+    }
+}
+'@
+    }
+    [Rewire.TestConsole]::EnsureAllocated()
+}
+
+function Invoke-WithRedirectedInput {
+    param(
+        [Parameter(Mandatory = $true)][string]$Script,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Input,
+        [Parameter(Mandatory = $true)][hashtable]$Environment
+    )
+
+    Initialize-TestConsole
+    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $StartInfo.FileName = Join-Path $PSHOME "pwsh.exe"
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.RedirectStandardInput = $true
+    foreach ($Argument in @("-NoLogo", "-NoProfile", "-File", $Script) + $Arguments) {
+        $StartInfo.ArgumentList.Add($Argument)
+    }
+    foreach ($Entry in $Environment.GetEnumerator()) {
+        $StartInfo.Environment[$Entry.Key] = [string]$Entry.Value
+    }
+    $Process = [Diagnostics.Process]::Start($StartInfo)
+    $Process.StandardInput.WriteLine($Input)
+    $Process.StandardInput.Close()
+    $Process.WaitForExit()
+    return $Process.ExitCode
+}
+
 New-Item -ItemType Directory -Path $Assets, $Package, $FixtureHome | Out-Null
 try {
     $Asset = "rewire-x86_64-pc-windows-msvc.zip"
@@ -75,6 +128,41 @@ try {
     $After = (Get-FileHash -LiteralPath $Installed -Algorithm SHA256).Hash
     if ($Before -ne $After) {
         throw "checksum failure replaced the existing installation"
+    }
+
+    # Replace the archive with the isolated stdin fixture for bootstrap terminal-boundary tests.
+    $FixtureSource = Join-Path $Root "scripts\tests\fixtures\runner.rs"
+    & rustc $FixtureSource --edition 2024 -o (Join-Path $Package "rewire.exe")
+    if ($LASTEXITCODE -ne 0) { throw "could not compile the installer fixture" }
+    Remove-Item -LiteralPath (Join-Path $Assets $Asset)
+    Compress-Archive -Path (Join-Path $Package "*") -DestinationPath (Join-Path $Assets $Asset)
+    $FixtureDigest = (Get-FileHash -LiteralPath (Join-Path $Assets $Asset) -Algorithm SHA256).Hash
+    Set-Content -LiteralPath (Join-Path $Assets "SHA256SUMS") -Value "$FixtureDigest  $Asset" -Encoding ascii
+
+    $TerminalOutput = Join-Path $TemporaryDirectory "terminal-arguments"
+    $TerminalStatus = Invoke-WithRedirectedInput `
+        -Script $Installer `
+        -Arguments @("--asset-base-url", $Assets, "--install-dir", $InstallDir) `
+        -Input "bootstrap-source" `
+        -Environment @{ REWIRE_TEST_OUTPUT = $TerminalOutput; REWIRE_TEST_REQUIRE_TERMINAL = "1" }
+    if ($TerminalStatus -ne 0) {
+        throw "installer did not attach console input; child exit code $TerminalStatus"
+    }
+    if ((Get-Content -LiteralPath $TerminalOutput) -notcontains "argument=configure") {
+        throw "installer did not preserve the default configure invocation"
+    }
+
+    foreach ($Mode in "--token-stdin", "--non-interactive") {
+        $ModeName = $Mode.TrimStart("-")
+        $InputOutput = Join-Path $TemporaryDirectory "$ModeName-arguments"
+        $InputStatus = Invoke-WithRedirectedInput `
+            -Script $Installer `
+            -Arguments @("--asset-base-url", $Assets, "--install-dir", $InstallDir, "--", "--fixture-read-stdin", $Mode) `
+            -Input "$ModeName-input" `
+            -Environment @{ REWIRE_TEST_OUTPUT = $InputOutput }
+        if ($InputStatus -ne 0 -or (Get-Content -LiteralPath $InputOutput) -notcontains "stdin=$ModeName-input") {
+            throw "$Mode did not preserve redirected standard input"
+        }
     }
 
     Write-Output "Windows installer tests passed."

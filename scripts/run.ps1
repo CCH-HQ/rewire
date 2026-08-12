@@ -16,6 +16,96 @@ $DownloadOptionSet = $false
 $ChecksumOptionSet = $false
 $Sha256OptionSet = $false
 
+function Test-RewireConsumesStandardInput {
+    param([string[]]$Arguments)
+    return $Arguments -contains "--token-stdin" -or $Arguments -contains "--non-interactive"
+}
+
+function Initialize-RewireNativeConsole {
+    if ("Rewire.NativeConsole" -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace Rewire {
+    public static class NativeConsole {
+        private const int StandardInputHandle = -10;
+        private const uint GenericRead = 0x80000000;
+        private const uint ShareReadWrite = 3;
+        private const uint OpenExisting = 3;
+        private static readonly IntPtr InvalidHandle = new IntPtr(-1);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr CreateFile(
+            string name, uint access, uint share, IntPtr security,
+            uint creation, uint flags, IntPtr template);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetStdHandle(int handle, IntPtr value);
+
+        [DllImport("kernel32.dll")]
+        public static extern IntPtr GetStdHandle(int handle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CloseHandle(IntPtr handle);
+
+        public static bool TryAttachInput(out IntPtr original, out IntPtr console) {
+            original = GetStdHandle(StandardInputHandle);
+            console = CreateFile(
+                "CONIN$", GenericRead, ShareReadWrite, IntPtr.Zero,
+                OpenExisting, 0, IntPtr.Zero);
+            if (console == InvalidHandle) {
+                console = IntPtr.Zero;
+                return false;
+            }
+            if (SetStdHandle(StandardInputHandle, console)) {
+                return true;
+            }
+            CloseHandle(console);
+            console = IntPtr.Zero;
+            return false;
+        }
+
+        public static void RestoreInput(IntPtr original, IntPtr console) {
+            SetStdHandle(StandardInputHandle, original);
+            CloseHandle(console);
+        }
+    }
+}
+'@
+}
+
+function Invoke-Rewire {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $script:RewireExitCode = 0
+    [IntPtr]$OriginalInput = [IntPtr]::Zero
+    [IntPtr]$ConsoleInput = [IntPtr]::Zero
+    $AttachConsole = [Console]::IsInputRedirected -and
+        -not (Test-RewireConsumesStandardInput -Arguments $Arguments)
+    try {
+        if ($AttachConsole) {
+            Initialize-RewireNativeConsole
+            [void][Rewire.NativeConsole]::TryAttachInput(
+                [ref]$OriginalInput,
+                [ref]$ConsoleInput
+            )
+        }
+
+        & $Path @Arguments
+        $script:RewireExitCode = $LASTEXITCODE
+    } finally {
+        if ($ConsoleInput -ne [IntPtr]::Zero) {
+            [Rewire.NativeConsole]::RestoreInput($OriginalInput, $ConsoleInput)
+        }
+    }
+}
+
 function Show-Usage {
     @'
 Download, verify, and run Rewire without installing it.
@@ -208,8 +298,8 @@ try {
     }
 
     [string[]]$RunArguments = if ($RewireArgs.Count -eq 0) { "configure" } else { $RewireArgs.ToArray() }
-    & $Binary @RunArguments
-    $ExitCode = $LASTEXITCODE
+    Invoke-Rewire -Path $Binary -Arguments $RunArguments
+    $ExitCode = $script:RewireExitCode
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $TemporaryDirectory -ErrorAction SilentlyContinue
 }

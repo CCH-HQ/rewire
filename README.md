@@ -36,45 +36,40 @@ rewire configure --no-color
 
 Both bootstrap paths select the current OS and architecture and verify the release archive against
 `SHA256SUMS`. Use `install` to keep Rewire in the normal user binary directory, or `run` to stage it
-in a private temporary directory for one invocation and remove it afterward. Download the script
-first so interactive `configure` keeps terminal stdin.
+in a private temporary directory for one invocation and remove it afterward. Bootstrap entrypoints
+recover the controlling terminal after their source arrives through a shell pipeline, while
+explicit `--token-stdin` and `--non-interactive` calls retain their original standard input.
 
 Unix persistent install:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.sh \
-  -o /tmp/rewire-install.sh
-sh /tmp/rewire-install.sh
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.sh | \
+  sh
 ```
 
 Unix one-time run:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.sh \
-  -o /tmp/rewire-run.sh
-sh /tmp/rewire-run.sh
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.sh | \
+  sh
 ```
 
 Windows PowerShell persistent install:
 
 ```powershell
-$installer = Join-Path $env:TEMP "rewire-install.ps1"
-Invoke-WebRequest `
-  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.ps1 `
-  -OutFile $installer
-& $installer
+Invoke-RestMethod `
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.ps1 | `
+  Invoke-Expression
 ```
 
 Windows PowerShell one-time run:
 
 ```powershell
-$runner = Join-Path $env:TEMP "rewire-run.ps1"
-Invoke-WebRequest `
-  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.ps1 `
-  -OutFile $runner
-& $runner
+Invoke-RestMethod `
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.ps1 | `
+  Invoke-Expression
 ```
 
 Arguments after `--` are passed to Rewire instead of opening the default workflow. The same

@@ -30,6 +30,14 @@ set -eu
 for argument in "$@"; do
     printf '%s\n' "$argument" >> "$REWIRE_TEST_OUTPUT"
 done
+if [ "${REWIRE_TEST_REQUIRE_TERMINAL:-0}" -eq 1 ]; then
+    [ -t 0 ] || exit 91
+    printf 'stdin=terminal\n' >> "$REWIRE_TEST_OUTPUT"
+fi
+if [ "${1:-}" = "--fixture-read-stdin" ]; then
+    IFS= read -r input || true
+    printf 'stdin=%s\n' "$input" >> "$REWIRE_TEST_OUTPUT"
+fi
 EOF
 chmod 0755 "$package/rewire"
 
@@ -69,6 +77,35 @@ REWIRE_TEST_OUTPUT=$default_output sh "$root/scripts/install.sh" \
     --install-dir "$install_dir"
 printf 'configure\n' > "$tmpdir/default-expected"
 diff -u "$tmpdir/default-expected" "$default_output"
+
+# Reproduce `curl ... | sh -s -- ...`: the script source occupies stdin, while its stdout and
+# controlling terminal remain interactive. The installed child must receive that terminal.
+piped_output=$tmpdir/piped-arguments
+REWIRE_TEST_OUTPUT=$piped_output \
+REWIRE_TEST_REQUIRE_TERMINAL=1 \
+    python3 "$root/scripts/tests/fixtures/pipe-with-tty.py" \
+    sh -s -- --asset-base-url "$assets" --install-dir "$install_dir" \
+    < "$root/scripts/install.sh" > "$tmpdir/piped.stdout"
+cat > "$tmpdir/piped-expected" <<'EOF'
+configure
+stdin=terminal
+EOF
+diff -u "$tmpdir/piped-expected" "$piped_output"
+
+# Explicit stdin-consuming modes retain their original pipe instead of attaching /dev/tty.
+token_output=$tmpdir/token-stdin-arguments
+printf 'fixture-token\n' | REWIRE_TEST_OUTPUT=$token_output \
+    sh "$root/scripts/install.sh" \
+    --asset-base-url "$assets" --install-dir "$install_dir" -- \
+    --fixture-read-stdin --token-stdin
+grep '^stdin=fixture-token$' "$token_output" >/dev/null
+
+non_interactive_output=$tmpdir/non-interactive-arguments
+printf 'automation-input\n' | REWIRE_TEST_OUTPUT=$non_interactive_output \
+    sh "$root/scripts/install.sh" \
+    --asset-base-url "$assets" --install-dir "$install_dir" -- \
+    --fixture-read-stdin --non-interactive
+grep '^stdin=automation-input$' "$non_interactive_output" >/dev/null
 
 no_run_output=$tmpdir/no-run-arguments
 REWIRE_TEST_OUTPUT=$no_run_output sh "$root/scripts/install.sh" \

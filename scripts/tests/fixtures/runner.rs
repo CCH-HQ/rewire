@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, IsTerminal, Read, Write};
 use std::process;
 
 fn main() {
@@ -16,6 +16,29 @@ fn main() {
         writeln!(writer, "argument={argument}").expect("write fixture argument");
     }
     writer.flush().expect("flush fixture output");
+
+    if env::var_os("REWIRE_TEST_REQUIRE_TERMINAL").is_some()
+        && !std::io::stdin().is_terminal()
+    {
+        process::exit(91);
+    }
+    if arguments
+        .first()
+        .is_some_and(|value| value == "--fixture-read-stdin")
+    {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .expect("read fixture stdin");
+        let mut writer = BufWriter::new(
+            File::options()
+                .append(true)
+                .open(env::var_os("REWIRE_TEST_OUTPUT").unwrap())
+                .expect("reopen fixture output"),
+        );
+        writeln!(writer, "stdin={}", input.trim_end()).expect("write fixture stdin");
+        writer.flush().expect("flush fixture stdin");
+    }
 
     if arguments
         .first()

@@ -37,6 +37,14 @@ set -eu
 if [ "${1:-}" = "--fixture-exit" ]; then
     exit "${2:-1}"
 fi
+if [ "${REWIRE_TEST_REQUIRE_TERMINAL:-0}" -eq 1 ]; then
+    [ -t 0 ] || exit 91
+    printf 'stdin=terminal\n' >> "$REWIRE_TEST_OUTPUT"
+fi
+if [ "${1:-}" = "--fixture-read-stdin" ]; then
+    IFS= read -r input || true
+    printf 'stdin=%s\n' "$input" >> "$REWIRE_TEST_OUTPUT"
+fi
 EOF
 chmod 0755 "$package/rewire"
 
@@ -87,6 +95,32 @@ REWIRE_TEST_OUTPUT=$default_output TMPDIR=$runner_tmp \
 printf 'argument=configure\n' > "$tmpdir/default-expected"
 tail -n +2 "$default_output" > "$tmpdir/default-actual"
 diff -u "$tmpdir/default-expected" "$tmpdir/default-actual"
+
+# Exercise the run-only entrypoint with its source piped into a shell under a controlling PTY.
+piped_output=$tmpdir/piped-arguments
+REWIRE_TEST_OUTPUT=$piped_output \
+REWIRE_TEST_REQUIRE_TERMINAL=1 \
+TMPDIR=$runner_tmp \
+    python3 "$root/scripts/tests/fixtures/pipe-with-tty.py" \
+    sh -s -- --asset-base-url "$assets" \
+    < "$root/scripts/run.sh" > "$tmpdir/piped.stdout"
+printf 'argument=configure\nstdin=terminal\n' > "$tmpdir/piped-expected"
+tail -n +2 "$piped_output" > "$tmpdir/piped-actual"
+diff -u "$tmpdir/piped-expected" "$tmpdir/piped-actual"
+piped_executable=$(sed -n 's/^executable=//p' "$piped_output")
+[ ! -e "$piped_executable" ]
+
+token_output=$tmpdir/token-stdin-arguments
+printf 'fixture-token\n' | REWIRE_TEST_OUTPUT=$token_output TMPDIR=$runner_tmp \
+    sh "$root/scripts/run.sh" --asset-base-url "$assets" -- \
+    --fixture-read-stdin --token-stdin
+grep '^stdin=fixture-token$' "$token_output" >/dev/null
+
+non_interactive_output=$tmpdir/non-interactive-arguments
+printf 'automation-input\n' | REWIRE_TEST_OUTPUT=$non_interactive_output TMPDIR=$runner_tmp \
+    sh "$root/scripts/run.sh" --asset-base-url "$assets" -- \
+    --fixture-read-stdin --non-interactive
+grep '^stdin=automation-input$' "$non_interactive_output" >/dev/null
 
 # A standalone copy can fetch its installer from an explicit local or remote source.
 isolated=$tmpdir/isolated

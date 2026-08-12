@@ -52,6 +52,17 @@ require_value() {
     [ "$count" -ge 2 ] || fail "$option requires a value"
 }
 
+should_attach_terminal_input() {
+    [ ! -t 0 ] && [ -t 1 ] || return 1
+    ( : < /dev/tty ) 2>/dev/null || return 1
+    for argument in "$@"; do
+        case "$argument" in
+            --token-stdin | --non-interactive) return 1 ;;
+        esac
+    done
+    return 0
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --release)
@@ -295,6 +306,11 @@ fi
 rm -rf "$tmpdir"
 tmpdir=
 if [ "$#" -eq 0 ]; then
-    exec "$destination" configure
+    set -- configure
+fi
+# `curl ... | sh` leaves the script pipe on stdin. Recover the controlling terminal for guided
+# prompts, while preserving stdin for explicit token and automation modes.
+if should_attach_terminal_input "$@"; then
+    exec "$destination" "$@" < /dev/tty
 fi
 exec "$destination" "$@"

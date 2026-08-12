@@ -74,7 +74,7 @@ jobs:
 
       - name: Check Docker E2E verifier syntax
         run: |
-          python3 -c 'from pathlib import Path; files = [Path("scripts/tests/verify-docker-e2e.py"), Path("scripts/tests/verify-client-runtime.py")]; [compile(path.read_bytes(), str(path), "exec") for path in files]'
+          python3 -c 'from pathlib import Path; files = [Path("scripts/tests/verify-docker-e2e.py"), Path("scripts/tests/verify-client-runtime.py"), Path("scripts/tests/fixtures/pipe-with-tty.py")]; [compile(path.read_bytes(), str(path), "exec") for path in files]'
 
       - name: Test Unix installer
         run: sh scripts/tests/install-unix.sh

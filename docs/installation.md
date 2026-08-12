@@ -45,16 +45,14 @@ temporary install directory internally, so installer-only options are rejected b
 
 ## Unix persistent install
 
-Download before execution when the installer should open the interactive workflow. Piping the
-script directly into `sh` consumes terminal stdin, which makes an interactive prompt unavailable.
+The installer recovers the controlling terminal when its own source arrives through a pipe. This
+keeps partial interactive configuration working with `curl | sh`; explicit `--token-stdin` and
+`--non-interactive` calls continue to consume their original standard input.
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.sh \
-  -o /tmp/rewire-install.sh
-
 # Install latest and open the workflow.
-sh /tmp/rewire-install.sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.sh | sh
 
 # Install a fixed release without running it.
 sh /tmp/rewire-install.sh --release 0.0.1 --install-dir "$HOME/bin" --no-run
@@ -70,12 +68,9 @@ printf '%s\n' "$REWIRE_TOKEN" | sh /tmp/rewire-install.sh -- \
 ## Unix one-time run
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.sh \
-  -o /tmp/rewire-run.sh
-
 # Download, verify, open the workflow, and clean up after it exits.
-sh /tmp/rewire-run.sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.sh | sh
 
 # Run a fixed release without writing to $HOME/.local/bin.
 sh /tmp/rewire-run.sh --release 0.0.1 -- doctor
@@ -89,13 +84,16 @@ sh /tmp/rewire-run.sh \
 ## Windows PowerShell persistent install
 
 ```powershell
+# Install latest and open the workflow.
+Invoke-RestMethod `
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.ps1 | `
+  Invoke-Expression
+
+# Download first when passing bootstrap or Rewire arguments.
 $installer = Join-Path $env:TEMP "rewire-install.ps1"
 Invoke-WebRequest `
   https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/install.ps1 `
   -OutFile $installer
-
-# Install latest and open the workflow.
-& $installer
 
 # Install only.
 & $installer --release 0.0.1 --install-dir "$HOME\bin" --no-run
@@ -110,13 +108,14 @@ Invoke-WebRequest `
 ## Windows PowerShell one-time run
 
 ```powershell
+Invoke-RestMethod `
+  https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.ps1 | `
+  Invoke-Expression
+
 $runner = Join-Path $env:TEMP "rewire-run.ps1"
 Invoke-WebRequest `
   https://raw.githubusercontent.com/CCH-HQ/rewire/master/scripts/run.ps1 `
   -OutFile $runner
-
-# Download, verify, open the workflow, and clean up after it exits.
-& $runner
 
 # Run a fixed release without writing to the user Programs directory.
 & $runner --release 0.0.1 -- doctor

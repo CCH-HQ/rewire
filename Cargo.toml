@@ -1,6 +1,6 @@
 [package]
 name = "rewire"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 rust-version = "1.94.0"
 description = "Vendor-neutral AI client configuration planner and transaction engine"
