@@ -136,16 +136,14 @@ try {
     }
 
     foreach ($Mode in "--token-stdin", "--non-interactive") {
-        $ModeName = $Mode.TrimStart("-")
-        $InputOutput = Join-Path $TemporaryDirectory "$ModeName-arguments"
-        $InputStatus = Invoke-WithRedirectedInput `
+        $ModeOutput = Join-Path $TemporaryDirectory "$($Mode.TrimStart('-'))-arguments"
+        $ModeStatus = Invoke-WithRedirectedInput `
             -Script $Installer `
-            -Arguments @("--asset-base-url", $Assets, "--install-dir", $InstallDir, "--", "--fixture-read-stdin", $Mode) `
-            -Input "$ModeName-input" `
-            -Environment @{ REWIRE_TEST_OUTPUT = $InputOutput }
-        $InputLines = @(Get-Content -LiteralPath $InputOutput)
-        if ($InputStatus -ne 0 -or $InputLines -notcontains "stdin=$ModeName-input") {
-            throw "$Mode did not preserve redirected standard input; fixture output: $($InputLines -join ' | ')"
+            -Arguments @("--asset-base-url", $Assets, "--install-dir", $InstallDir, "--", $Mode) `
+            -Input "bootstrap-source" `
+            -Environment @{ REWIRE_TEST_OUTPUT = $ModeOutput; REWIRE_TEST_REQUIRE_TERMINAL = "1" }
+        if ($ModeStatus -ne 91) {
+            throw "$Mode unexpectedly attached terminal input; child exit code $ModeStatus"
         }
     }
 
