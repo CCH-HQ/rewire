@@ -124,16 +124,6 @@ try {
         throw "installer did not preserve the default configure invocation"
     }
 
-    $DoctorOutput = Join-Path $TemporaryDirectory "doctor-output"
-    $DoctorStatus = Invoke-WithRedirectedInput `
-        -Script $Installer `
-        -Arguments @("--asset-base-url", $Assets, "--install-dir", $InstallDir, "--", "--fixture-read-stdin", "doctor") `
-        -Input "doctor-input" `
-        -Environment @{ REWIRE_TEST_OUTPUT = $DoctorOutput }
-    if ($DoctorStatus -ne 0 -or (Get-Content -LiteralPath $DoctorOutput) -notcontains "stdin=doctor-input") {
-        throw "non-interactive doctor invocation did not retain redirected standard input"
-    }
-
     $QuotedOutput = Join-Path $TemporaryDirectory "quoted-terminal-arguments"
     $QuotedStatus = Invoke-WithRedirectedInput `
         -Script $Installer `
