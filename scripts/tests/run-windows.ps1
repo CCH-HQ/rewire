@@ -139,8 +139,9 @@ try {
             -Arguments @("--asset-base-url", $Assets, "--", "--fixture-read-stdin", $Mode) `
             -Input "$ModeName-input" `
             -Environment @{ REWIRE_TEST_OUTPUT = $InputOutput; TEMP = $RunnerTemp }
-        if ($InputStatus -ne 0 -or (Get-Content -LiteralPath $InputOutput) -notcontains "stdin=$ModeName-input") {
-            throw "$Mode did not preserve redirected standard input"
+        $InputLines = @(Get-Content -LiteralPath $InputOutput)
+        if ($InputStatus -ne 0 -or $InputLines -notcontains "stdin=$ModeName-input") {
+            throw "$Mode did not preserve redirected standard input; fixture output: $($InputLines -join ' | ')"
         }
     }
 

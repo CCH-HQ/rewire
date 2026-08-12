@@ -172,8 +172,7 @@ function Invoke-RewireRedirectedInputProcess {
         ConvertTo-RewireNativeArgument -Argument $_
     }) -join ' ')
     $Process = [Diagnostics.Process]::Start($StartInfo)
-    $SourceInput = [Console]::OpenStandardInput()
-    $SourceInput.CopyTo($Process.StandardInput.BaseStream)
+    $Process.StandardInput.Write([Console]::In.ReadToEnd())
     $Process.StandardInput.Close()
     $Process.WaitForExit()
     return $Process.ExitCode
