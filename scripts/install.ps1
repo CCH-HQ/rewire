@@ -149,6 +149,7 @@ function Invoke-Rewire {
 
         if ($ConsoleInput -ne [IntPtr]::Zero) {
             $script:RewireExitCode = Invoke-RewireNativeProcess -Path $Path -Arguments $Arguments
+            $global:LASTEXITCODE = $script:RewireExitCode
         } else {
             & $Path @Arguments
             $script:RewireExitCode = $LASTEXITCODE
