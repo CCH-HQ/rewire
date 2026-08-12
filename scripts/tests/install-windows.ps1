@@ -13,33 +13,6 @@ $Package = Join-Path $TemporaryDirectory "package"
 $InstallDir = Join-Path $TemporaryDirectory "install"
 $FixtureHome = Join-Path $TemporaryDirectory "fixture home"
 
-function Initialize-TestConsole {
-    if (-not ("Rewire.TestConsole" -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-namespace Rewire {
-    public static class TestConsole {
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr GetConsoleWindow();
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool AllocConsole();
-
-        public static void EnsureAllocated() {
-            if (GetConsoleWindow() == IntPtr.Zero && !AllocConsole()) {
-                throw new InvalidOperationException("could not allocate the test console");
-            }
-        }
-    }
-}
-'@
-    }
-    [Rewire.TestConsole]::EnsureAllocated()
-}
-
 function Invoke-WithRedirectedInput {
     param(
         [Parameter(Mandatory = $true)][string]$Script,
@@ -48,7 +21,6 @@ function Invoke-WithRedirectedInput {
         [Parameter(Mandatory = $true)][hashtable]$Environment
     )
 
-    Initialize-TestConsole
     $StartInfo = [Diagnostics.ProcessStartInfo]::new()
     $StartInfo.FileName = Join-Path $PSHOME "pwsh.exe"
     $StartInfo.UseShellExecute = $false
