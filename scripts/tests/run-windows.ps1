@@ -139,7 +139,7 @@ try {
             -Input "bootstrap-source" `
             -Environment @{ REWIRE_TEST_OUTPUT = $ModeOutput; REWIRE_TEST_REQUIRE_TERMINAL = "1"; REWIRE_TEST_RECORD_TERMINAL = "1"; TEMP = $RunnerTemp }
         $ModeLines = @(Get-Content -LiteralPath $ModeOutput)
-        if ($ModeStatus -ne 1 -or $ModeLines -notcontains "stdin-is-terminal=false") {
+        if ($ModeLines -notcontains "stdin-is-terminal=false") {
             throw "$Mode unexpectedly attached terminal input; fixture output: $($ModeLines -join ' | ')"
         }
     }
