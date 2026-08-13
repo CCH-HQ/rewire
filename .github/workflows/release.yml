@@ -26,15 +26,19 @@ jobs:
             binary: rewire
             archive: tar
           - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             binary: rewire
             archive: tar
           - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             binary: rewire
             archive: tar
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
+            binary: rewire.exe
+            archive: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
             binary: rewire.exe
             archive: zip
     runs-on: ${{ matrix.runner }}
@@ -56,10 +60,36 @@ jobs:
           toolchain: 1.94.0
           targets: ${{ matrix.target }}
 
-      - name: Build release binary
+      - name: Install musl linker
+        if: startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-musl')
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Build musl release binary
+        if: startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-musl')
+        shell: bash
+        env:
+          REWIRE_GIT_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release --target ${{ matrix.target }} --config 'target.${{ matrix.target }}.linker="musl-gcc"'
+
+      - name: Build native release binary
+        if: ${{ !startsWith(matrix.target, 'x86_64-unknown-linux-musl') && !startsWith(matrix.target, 'aarch64-unknown-linux-musl') }}
         env:
           REWIRE_GIT_COMMIT: ${{ github.sha }}
         run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Verify Linux binary is fully static
+        if: startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-musl')
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          if readelf --program-headers "$binary" | grep -q 'Requesting program interpreter'; then
+            echo "Linux release binary unexpectedly has a dynamic interpreter" >&2
+            exit 1
+          fi
+          if readelf --dynamic "$binary" | grep -q '(NEEDED)'; then
+            echo "Linux release binary unexpectedly has dynamic library dependencies" >&2
+            exit 1
+          fi
 
       - name: Stage Unix archive
         if: matrix.archive == 'tar'

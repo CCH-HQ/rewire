@@ -40,7 +40,12 @@ function Invoke-WithRedirectedInput {
 
 New-Item -ItemType Directory -Path $Assets, $Package, $FixtureHome | Out-Null
 try {
-    $Asset = "rewire-x86_64-pc-windows-msvc.zip"
+    $Target = switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+        "X64" { "x86_64-pc-windows-msvc" }
+        "Arm64" { "aarch64-pc-windows-msvc" }
+        default { throw "unsupported Windows test architecture: $_" }
+    }
+    $Asset = "rewire-$Target.zip"
     Copy-Item -LiteralPath $BinaryPath -Destination (Join-Path $Package "rewire.exe")
     Compress-Archive -Path (Join-Path $Package "*") -DestinationPath (Join-Path $Assets $Asset)
     $Digest = (Get-FileHash -LiteralPath (Join-Path $Assets $Asset) -Algorithm SHA256).Hash

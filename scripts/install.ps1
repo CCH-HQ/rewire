@@ -352,11 +352,13 @@ if (-not $IsWindowsHost) {
     throw "install.ps1 supports Windows; use install.sh on Unix"
 }
 $Architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-if ($Architecture -ne "X64") {
-    throw "unsupported Windows architecture: $Architecture"
+$Target = switch ($Architecture) {
+    "X64" { "x86_64-pc-windows-msvc" }
+    "Arm64" { "aarch64-pc-windows-msvc" }
+    default { throw "unsupported Windows architecture: $Architecture" }
 }
 
-$Asset = "rewire-x86_64-pc-windows-msvc.zip"
+$Asset = "rewire-$Target.zip"
 if ($DownloadUrl -and $AssetBaseUrl) {
     throw "--download-url conflicts with --asset-base-url"
 }

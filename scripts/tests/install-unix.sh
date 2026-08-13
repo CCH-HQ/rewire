@@ -12,8 +12,8 @@ trap cleanup 0 1 2 3 15
 case "$(uname -s):$(uname -m)" in
     Darwin:x86_64 | Darwin:amd64) target=x86_64-apple-darwin ;;
     Darwin:arm64 | Darwin:aarch64) target=aarch64-apple-darwin ;;
-    Linux:x86_64 | Linux:amd64) target=x86_64-unknown-linux-gnu ;;
-    Linux:arm64 | Linux:aarch64) target=aarch64-unknown-linux-gnu ;;
+    Linux:x86_64 | Linux:amd64) target=x86_64-unknown-linux-musl ;;
+    Linux:arm64 | Linux:aarch64) target=aarch64-unknown-linux-musl ;;
     *) printf 'unsupported test platform\n' >&2; exit 1 ;;
 esac
 
@@ -91,6 +91,61 @@ configure
 stdin=terminal
 EOF
 diff -u "$tmpdir/piped-expected" "$piped_output"
+
+# Exercise the real inquire/crossterm key reader, not only isatty(0). On macOS the default mio
+# event source renders the prompt but rejects the terminal fd restored after `curl | sh`.
+cargo build --locked --bin rewire
+cp "$root/target/debug/rewire" "$package/rewire"
+chmod 0755 "$package/rewire"
+tar -C "$package" -czf "$assets/$asset" rewire
+if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(sha256sum "$assets/$asset" | awk '{print $1}')
+else
+    digest=$(shasum -a 256 "$assets/$asset" | awk '{print $1}')
+fi
+printf '%s  %s\n' "$digest" "$asset" > "$assets/SHA256SUMS"
+
+interactive_home=$tmpdir/interactive-home
+mkdir -p "$interactive_home"
+REWIRE_TEST_EXPECT='Choose one or more clients' \
+REWIRE_TEST_INPUT="$(printf '\003')" \
+    python3 "$root/scripts/tests/fixtures/pipe-with-tty.py" \
+    sh -s -- --asset-base-url "$assets" --install-dir "$install_dir" -- \
+    --baseurl https://gateway.example --token fixture-token \
+    --home "$interactive_home" --dry-run --no-color \
+    < "$root/scripts/install.sh" > "$tmpdir/interactive.stdout"
+grep 'Choose one or more clients' "$tmpdir/interactive.stdout" >/dev/null
+if grep 'Failed to initialize input reader' "$tmpdir/interactive.stdout" >/dev/null; then
+    printf 'piped installer did not initialize the real terminal input reader\n' >&2
+    exit 1
+fi
+
+# Restore the shell fixture for the remaining installer boundary checks.
+cat > "$package/rewire" <<'EOF'
+#!/bin/sh
+set -eu
+: "${REWIRE_TEST_OUTPUT:?}"
+: > "$REWIRE_TEST_OUTPUT"
+for argument in "$@"; do
+    printf '%s\n' "$argument" >> "$REWIRE_TEST_OUTPUT"
+done
+if [ "${REWIRE_TEST_REQUIRE_TERMINAL:-0}" -eq 1 ]; then
+    [ -t 0 ] || exit 91
+    printf 'stdin=terminal\n' >> "$REWIRE_TEST_OUTPUT"
+fi
+if [ "${1:-}" = "--fixture-read-stdin" ]; then
+    IFS= read -r input || true
+    printf 'stdin=%s\n' "$input" >> "$REWIRE_TEST_OUTPUT"
+fi
+EOF
+chmod 0755 "$package/rewire"
+tar -C "$package" -czf "$assets/$asset" rewire
+if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(sha256sum "$assets/$asset" | awk '{print $1}')
+else
+    digest=$(shasum -a 256 "$assets/$asset" | awk '{print $1}')
+fi
+printf '%s  %s\n' "$digest" "$asset" > "$assets/SHA256SUMS"
 
 # Explicit stdin-consuming modes retain their original pipe instead of attaching /dev/tty.
 token_output=$tmpdir/token-stdin-arguments

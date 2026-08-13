@@ -5,10 +5,12 @@
 import fcntl
 import os
 import pty
+import select
 import struct
 import subprocess
 import sys
 import termios
+import time
 
 
 def attach_controlling_terminal() -> None:
@@ -39,7 +41,20 @@ def main() -> int:
     try:
         with os.fdopen(write_input, "wb", closefd=True) as child_input:
             child_input.write(piped_input)
+        expected = os.environ.get("REWIRE_TEST_EXPECT", "").encode()
+        response = os.environ.get("REWIRE_TEST_INPUT", "").encode()
+        observed = bytearray()
+        deadline = time.monotonic() + 30
+        responded = not expected
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.terminate()
+                raise TimeoutError(f"timed out waiting for {expected!r}")
+            readable, _, _ = select.select([master], [], [], remaining)
+            if not readable:
+                process.terminate()
+                raise TimeoutError(f"timed out waiting for {expected!r}")
             try:
                 output = os.read(master, 8192)
             except OSError as error:
@@ -48,12 +63,22 @@ def main() -> int:
                 raise
             if not output:
                 break
+            observed.extend(output)
             sys.stdout.buffer.write(output)
             sys.stdout.buffer.flush()
+            if not responded and expected in observed:
+                os.write(master, response)
+                responded = True
     finally:
         os.close(master)
 
-    return process.wait()
+    status = process.wait()
+    if expected and not responded:
+        transcript = observed.decode(errors="replace")
+        raise RuntimeError(
+            f"command exited before displaying {expected!r}; PTY output:\n{transcript}"
+        )
+    return status
 
 
 if __name__ == "__main__":

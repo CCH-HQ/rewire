@@ -4,6 +4,21 @@ All notable changes to Rewire are documented here.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-08-13
+
+### Added
+
+- Published a native Windows arm64 archive and taught the PowerShell installer and one-time runner to select it automatically.
+
+### Changed
+
+- Switched Linux arm64 and x86-64 release archives from glibc-linked GNU targets to fully static musl targets for compatibility across Linux distributions.
+- Root configuration invocations now print their numbered plan and ask for confirmation before writing; unattended applies require `--yes`.
+
+### Fixed
+
+- Switched Unix guided prompts to crossterm's direct controlling-TTY poller, so a prompt launched after `curl | sh` accepts keyboard input on macOS instead of rendering once and then failing to initialize its input reader.
+
 ## [0.0.3] - 2026-08-13
 
 ### Fixed
@@ -43,7 +58,8 @@ All notable changes to Rewire are documented here.
 - Secret-bearing files and transaction state use private permissions; backups are authenticated-encrypted and plaintext credential leakage is checked in integration and live-client E2E tests.
 - Configuration writes reject unsafe paths, symlinks, read-only targets, and time-of-check/time-of-use changes before committing a transaction.
 
-[Unreleased]: https://github.com/CCH-HQ/rewire/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/CCH-HQ/rewire/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/CCH-HQ/rewire/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/CCH-HQ/rewire/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/CCH-HQ/rewire/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/CCH-HQ/rewire/releases/tag/v0.0.1

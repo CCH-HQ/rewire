@@ -92,8 +92,16 @@ jobs:
         run: cargo check --locked --target x86_64-pc-windows-gnu --all-targets
 
   installer-windows:
-    name: Test Windows installer
-    runs-on: windows-2025
+    name: Test Windows installer (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86-64
+            runner: windows-2025
+          - architecture: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6

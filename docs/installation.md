@@ -7,7 +7,8 @@ entrypoints share the installer implementation for the platform-sensitive operat
 2. download the archive and checksum manifest;
 3. verify SHA-256 before changing the existing installation;
 4. extract and atomically stage the destination binary; and
-5. run `rewire configure` by default, or pass supplied arguments to Rewire unchanged.
+5. show the numbered plan and require an explicit confirmation before applying it, or pass
+   supplied arguments to Rewire unchanged (automation must use `--yes` to apply without a prompt).
 
 `install.sh` and `install.ps1` persist the binary. The default Unix destination is
 `$HOME/.local/bin/rewire`; the default Windows destination is
@@ -189,9 +190,7 @@ variables, image layers, or logs.
 | --- | --- |
 | macOS arm64 | `rewire-aarch64-apple-darwin.tar.gz` |
 | macOS x86-64 | `rewire-x86_64-apple-darwin.tar.gz` |
-| Linux arm64 | `rewire-aarch64-unknown-linux-gnu.tar.gz` |
-| Linux x86-64 | `rewire-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux arm64 | `rewire-aarch64-unknown-linux-musl.tar.gz` |
+| Linux x86-64 | `rewire-x86_64-unknown-linux-musl.tar.gz` |
+| Windows arm64 | `rewire-aarch64-pc-windows-msvc.zip` |
 | Windows x86-64 | `rewire-x86_64-pc-windows-msvc.zip` |
-
-Windows arm64 is rejected because the release workflow does not currently publish a native
-Windows arm64 artifact. Explicit rejection is preferable to installing an incompatible binary.

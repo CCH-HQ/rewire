@@ -6,6 +6,7 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 key_file=${REWIRE_E2E_KEY_FILE:-$root/tmp/key}
 domain_file=${REWIRE_E2E_DOMAIN_FILE:-$root/tmp/domain}
 image=${REWIRE_E2E_IMAGE:-rust:1.94.0-bookworm}
+builder_image=${REWIRE_E2E_BUILDER_IMAGE:-rust:1.94.0-alpine}
 skip_api_probe=0
 skip_client_calls=0
 
@@ -19,7 +20,8 @@ Usage:
 Options:
   --key-file <PATH>     API token file (default: tmp/key)
   --domain-file <PATH>  API base URL file (default: tmp/domain)
-  --image <IMAGE>       Builder/client image (default: rust:1.94.0-bookworm)
+  --image <IMAGE>       Installer runtime image (default: rust:1.94.0-bookworm)
+  --builder-image <IMG> musl builder image (default: rust:1.94.0-alpine)
   --skip-api-probe      Skip the authenticated /v1/models compatibility probe
   --skip-client-calls   Skip launching the five official client CLIs
   -h, --help            Print this help
@@ -53,6 +55,11 @@ while [ "$#" -gt 0 ]; do
         --image)
             require_value "$1" "$#"
             image=$2
+            shift 2
+            ;;
+        --builder-image)
+            require_value "$1" "$#"
+            builder_image=$2
             shift 2
             ;;
         --skip-api-probe)
@@ -122,7 +129,7 @@ empty_tmp=$tmpdir/empty-tmp
 mkdir -p "$assets" "$target_dir" "$home_dir" "$install_dir" "$logs" "$empty_tmp"
 
 commit=$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || printf unknown)
-printf 'Building the release archive in %s...\n' "$image"
+printf 'Building the release archive in %s...\n' "$builder_image"
 docker run --rm \
     --env CARGO_TARGET_DIR=/target \
     --env REWIRE_GIT_COMMIT="$commit" \
@@ -131,16 +138,17 @@ docker run --rm \
     --volume "$assets:/dist" \
     --volume "$target_dir:/target" \
     --workdir /workspace \
-    "$image" sh -eu -c '
-        cargo build --locked --release
+    "$builder_image" sh -eu -c '
         target=$(rustc -vV | sed -n "s/^host: //p")
         case "$target" in
-            x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu) ;;
+            x86_64-unknown-linux-musl | aarch64-unknown-linux-musl) ;;
             *) printf "unsupported Docker Rust host: %s\n" "$target" >&2; exit 1 ;;
         esac
+        apk add --no-cache musl-dev >/dev/null
+        cargo build --locked --release --target "$target"
         package=/dist/package
         mkdir "$package"
-        cp /target/release/rewire "$package/rewire"
+        cp "/target/$target/release/rewire" "$package/rewire"
         cp README.md CHANGELOG.md LICENSE "$package/"
         archive="rewire-$target.tar.gz"
         tar -C "$package" -czf "/dist/$archive" .

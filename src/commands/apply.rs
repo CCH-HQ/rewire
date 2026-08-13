@@ -1,5 +1,5 @@
 use super::configuration;
-use crate::cli::{Cli, Output};
+use crate::cli::{Cli, Output, input};
 use anyhow::Result;
 use rewire::{apply_plan, build_plan_with_catalog};
 use std::path::Path;
@@ -15,8 +15,17 @@ pub(super) fn run(
         return Ok(());
     };
     let plan = build_plan_with_catalog(home, &completed.input, &completed.models)?;
-    if cli.execution.dry_run || !cli.execution.yes {
+    if cli.execution.dry_run {
         return output.plan(&plan);
+    }
+    if !cli.execution.yes {
+        output.plan(&plan)?;
+        if !interactive_terminal || cli.display.json {
+            return Ok(());
+        }
+        if !input::confirm_plan(!cli.display.no_color)? {
+            return output.cancelled("Plan was not applied.");
+        }
     }
     let transaction = apply_plan(home, &plan)?;
     output.applied(&transaction, &plan)

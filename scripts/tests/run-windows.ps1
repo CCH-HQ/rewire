@@ -45,7 +45,12 @@ try {
         throw "could not compile the run-only fixture"
     }
 
-    $Asset = "rewire-x86_64-pc-windows-msvc.zip"
+    $Target = switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+        "X64" { "x86_64-pc-windows-msvc" }
+        "Arm64" { "aarch64-pc-windows-msvc" }
+        default { throw "unsupported Windows test architecture: $_" }
+    }
+    $Asset = "rewire-$Target.zip"
     Compress-Archive -Path (Join-Path $Package "*") -DestinationPath (Join-Path $Assets $Asset)
     $Digest = (Get-FileHash -LiteralPath (Join-Path $Assets $Asset) -Algorithm SHA256).Hash
     Set-Content -LiteralPath (Join-Path $Assets "SHA256SUMS") -Value "$Digest  $Asset" -Encoding ascii

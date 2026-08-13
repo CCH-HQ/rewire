@@ -802,6 +802,29 @@ fn apply_defaults_to_human_output() {
 }
 
 #[test]
+fn apply_without_yes_prints_plan_and_never_writes_on_non_terminal() {
+    let home = tempdir().unwrap();
+    Command::cargo_bin("rewire")
+        .unwrap()
+        .args([
+            "--baseurl",
+            "https://gateway.example",
+            "--token",
+            "plan-only-secret",
+            "--client",
+            "claude",
+            "--home",
+        ])
+        .arg(home.path())
+        .arg("--no-color")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[CREATE]"))
+        .stdout(predicate::str::contains("plan-only-secret").not());
+    assert!(!home.path().join(".claude/settings.json").exists());
+}
+
+#[test]
 fn json_mode_formats_runtime_errors_for_automation() {
     let output = Command::cargo_bin("rewire")
         .unwrap()

@@ -150,6 +150,23 @@ pub(crate) fn confirm_latest_rollback(id: &str, color: bool) -> Result<bool> {
     }
 }
 
+pub(crate) fn confirm_plan(color: bool) -> Result<bool> {
+    let render_config = if color {
+        RenderConfig::default()
+    } else {
+        RenderConfig::empty()
+    };
+    match Confirm::new("Apply this plan?")
+        .with_default(false)
+        .with_render_config(render_config)
+        .prompt()
+    {
+        Ok(confirmed) => Ok(confirmed),
+        Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum BackupCommand {
     /// List available transaction identifiers.

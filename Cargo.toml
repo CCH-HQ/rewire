@@ -1,6 +1,6 @@
 [package]
 name = "rewire"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 rust-version = "1.94.0"
 description = "Vendor-neutral AI client configuration planner and transaction engine"
@@ -53,6 +53,9 @@ clap_complete = "4.6"
 directories = "6"
 fs2 = "0.4"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
+# Use crossterm's direct TTY poller: its default mio reader rejects a terminal fd restored after
+# `curl | sh`, even though raw mode and rendering have already initialized successfully on macOS.
+crossterm = { version = "0.29", default-features = false, features = ["use-dev-tty"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonc-parser = { version = "0.33", features = ["cst", "serde_json"] }
